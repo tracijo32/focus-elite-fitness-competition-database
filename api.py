@@ -1,8 +1,67 @@
+import time
+
 import requests
 
 class CompetitionCornerAPI:
-    def __init__(self):
+    def __init__(
+        self,
+        request_delay_seconds: float = 0.5,
+        max_retries: int = 5,
+        backoff_base_seconds: float = 1.0,
+        timeout_seconds: int = 30,
+    ):
         self.base_url = "https://competitioncorner.net/api2/v1"
+        self.request_delay_seconds = request_delay_seconds
+        self.max_retries = max_retries
+        self.backoff_base_seconds = backoff_base_seconds
+        self.timeout_seconds = timeout_seconds
+        self._last_request_ts = 0.0
+
+    def _is_rate_limited_response(self, response: requests.Response, payload) -> bool:
+        if response.status_code == 429:
+            return True
+        if isinstance(payload, dict):
+            text = " ".join(
+                str(v).lower() for v in payload.values() if isinstance(v, (str, int, float))
+            )
+            return any(
+                term in text
+                for term in ["too frequent", "rate limit", "too many requests", "slow down"]
+            )
+        if isinstance(payload, str):
+            lower_payload = payload.lower()
+            return any(
+                term in lower_payload
+                for term in ["too frequent", "rate limit", "too many requests", "slow down"]
+            )
+        return False
+
+    def _request_json(self, endpoint: str, params: dict | None = None):
+        url = self.base_url + endpoint
+        attempt = 0
+        while True:
+            now = time.time()
+            elapsed = now - self._last_request_ts
+            if elapsed < self.request_delay_seconds:
+                time.sleep(self.request_delay_seconds - elapsed)
+
+            response = requests.get(url, params=params, timeout=self.timeout_seconds)
+            self._last_request_ts = time.time()
+
+            try:
+                payload = response.json()
+            except requests.exceptions.JSONDecodeError:
+                payload = response.text
+
+            rate_limited = self._is_rate_limited_response(response, payload)
+            if rate_limited and attempt < self.max_retries:
+                backoff = self.backoff_base_seconds * (2**attempt)
+                time.sleep(backoff)
+                attempt += 1
+                continue
+
+            response.raise_for_status()
+            return payload
 
     def get_events(
         self,
@@ -16,12 +75,9 @@ class CompetitionCornerAPI:
         if timestamp:
             params['timestamp'] = timestamp
 
-        url = self.base_url + "/events/filtered"
-
         events_all = []
         while True:
-            r = requests.get(url, params=params)
-            events = r.json()
+            events = self._request_json("/events/filtered", params=params)
             if len(events) == 0:
                 break
             events_all.extend(events)
@@ -30,14 +86,10 @@ class CompetitionCornerAPI:
         return events_all
 
     def get_event(self,event_id: int):
-        url = self.base_url + f"/events/{event_id}"
-        r = requests.get(url)
-        return r.json()
+        return self._request_json(f"/events/{event_id}")
 
     def get_event_divisions(self, event_id: int):
-        url = self.base_url + f'/leaderboard/{event_id}'
-        r = requests.get(url)
-        return r.json()
+        return self._request_json(f"/leaderboard/{event_id}")
 
     def get_event_leaderboard(
         self, 
@@ -45,7 +97,6 @@ class CompetitionCornerAPI:
         division_key: str,
         per_page: int = 50
     ):
-        url = self.base_url + f'/leaderboard/{event_id}/tab/{division_key}'
         params = {
             'start': 0,
             'end': per_page,
@@ -53,8 +104,8 @@ class CompetitionCornerAPI:
         }
         all_rows = []
         while True:
-            r = requests.get(url,params=params)
-            rows = r.json()['athletes']
+            payload = self._request_json(f"/leaderboard/{event_id}/tab/{division_key}", params=params)
+            rows = payload.get('athletes', [])
             if len(rows) == 0:
                 break
             all_rows.extend(rows)
@@ -62,15 +113,33 @@ class CompetitionCornerAPI:
             params['end'] += per_page
         return all_rows
 
+    def get_event_workouts(
+        self, 
+        event_id: int, 
+        division_key: str
+    ):
+        params = {
+            'hasAthletes': False
+        }
+        payload = self._request_json(f"/leaderboard/{event_id}/tab/{division_key}", params=params)
+        return payload.get('workouts', [])
+
     def get_participant(
         self,
         division_key: str,
         roster_id: int
     ):
-        url = self.base_url + f'/leaderboard/{division_key}/participantdata'
         params = {
             'preview': False,
             'rosterId': roster_id
         }
-        r = requests.get(url,params=params)
-        return r.json()
+        return self._request_json(f"/leaderboard/{division_key}/participantdata", params=params)
+
+    def get_workout(self, event_id: int, workout_id: int):
+        params = {
+            'preview': False
+        }
+        return self._request_json(f"/events/{event_id}/workouts/{workout_id}/public", params=params)
+
+    def get_athlete_page(self, profile_key: str):
+        return self._request_json(f"/accounts/athletepage/{profile_key}")
