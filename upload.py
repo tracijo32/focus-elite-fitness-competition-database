@@ -5,6 +5,7 @@ from google.cloud import bigquery
 from datetime import datetime, timezone, timedelta
 from models import CFEntrant, CFScore
 from parameters import GoogleCloudParameters
+import time
 
 gcp_params = GoogleCloudParameters()
 
@@ -39,22 +40,46 @@ class UploadManager:
     def get_json_data(self) -> list[dict]:
         return [model.model_dump() for model in self.models.values()]
 
-    def _temp_table_id(self) -> str:
+    @property
+    def temp_table_id(self) -> str:
         return f"{self.full_table_id}_temp"
 
     def _create_temporary_table(self):
         target_table = self.client.get_table(self.full_table_id)
         schema = target_table.schema
-        temp_table = bigquery.Table(self._temp_table_id(), schema=schema)
+        temp_table = bigquery.Table(self.temp_table_id, schema=schema)
         temp_table.expires = datetime.now(timezone.utc) + timedelta(hours=1)
         return self.client.create_table(temp_table, exists_ok=True)
 
+    def _wait_for_table(self, table_id: str, retries: int = 5, delay_seconds: float = 0.2):
+        for attempt in range(retries):
+            try:
+                return self.client.get_table(table_id)
+            except Exception:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(delay_seconds * (2 ** attempt))
+
     def _upload_to_temp_table(self):
-        return self.client.insert_rows_json(self._temp_table_id(), self.get_json_data())
+        rows = self.get_json_data()
+        if not rows:
+            return []
+        job_config = bigquery.LoadJobConfig(
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+        )
+        load_job = self.client.load_table_from_json(
+            rows,
+            self.temp_table_id,
+            job_config=job_config,
+        )
+        load_job.result()
+        if load_job.errors:
+            raise RuntimeError(f"BigQuery load_table_from_json errors: {load_job.errors}")
+        return load_job
 
     def _merge(self, overwrite: bool = False):
-        t = self._sql_table(self.full_table_id)
-        s = self._sql_table(self._temp_table_id())
+        t = self.full_table_id
+        s = self.temp_table_id
         # ON must be one boolean expression: use AND between key predicates (not commas).
         key_fields_str = " AND ".join([f"T.{field} = S.{field}" for field in self.key_fields])
         insert_cols = ", ".join(self.columns)
@@ -66,8 +91,8 @@ class UploadManager:
         else:
             overwrite_sql = ""
         merge_query = f"""
-MERGE {t} T
-USING {s} S
+MERGE `{t}` T
+USING `{s}` S
 ON {key_fields_str}
 {overwrite_sql}WHEN NOT MATCHED THEN
   INSERT ({insert_cols})
@@ -75,11 +100,13 @@ ON {key_fields_str}
 """
         return self.client.query(merge_query).result()
 
-    def _delete_temp_table(self, client: bigquery.Client):
-        return client.delete_table(self._temp_table_id())
+    def _delete_temp_table(self):
+        return self.client.delete_table(self.temp_table_id, not_found_ok=True)
 
     def upload_and_merge(self, overwrite: bool = False):
+        self._delete_temp_table()
         self._create_temporary_table()
+        self._wait_for_table(self.temp_table_id)
         self._upload_to_temp_table()
         self._merge(overwrite=overwrite)
         self._delete_temp_table()
