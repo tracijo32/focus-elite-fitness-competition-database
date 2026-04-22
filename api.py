@@ -1,16 +1,16 @@
-import time
+import time, requests
+import requests, time
 
-import requests
-
-class CompetitionCornerAPI:
+class APIRequestClient:
     def __init__(
         self,
+        base_url: str,
         request_delay_seconds: float = 0.5,
         max_retries: int = 5,
         backoff_base_seconds: float = 1.0,
         timeout_seconds: int = 30,
     ):
-        self.base_url = "https://competitioncorner.net/api2/v1"
+        self.base_url = base_url
         self.request_delay_seconds = request_delay_seconds
         self.max_retries = max_retries
         self.backoff_base_seconds = backoff_base_seconds
@@ -62,6 +62,31 @@ class CompetitionCornerAPI:
 
             response.raise_for_status()
             return payload
+
+class CrossFitAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(base_url="https://c3po.crossfit.com/api")
+
+    def get_events(self):
+        return self._request_json("/competitions/v1/competitions")
+
+    def get_leaderboard_page(
+        self, 
+        path: str,
+        division: int,
+        params: dict = {},
+        page: int | None = None
+    ):
+        if not url_path.startswith('/'):
+            url_path = '/' + url_path
+        params['division'] = division
+        if page is not None:
+            params['page'] = page
+        return self._request_json(url_path, params=params)
+
+class CompetitionCornerAPIRequestClient(APIRequestClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(base_url="https://competitioncorner.net/api2/v1", *args, **kwargs)
 
     def get_events(
         self,
@@ -143,3 +168,23 @@ class CompetitionCornerAPI:
 
     def get_athlete_page(self, profile_key: str):
         return self._request_json(f"/accounts/athletepage/{profile_key}")
+
+class CompeteStrongestClient(APIRequestClient):
+    def __init__(self):
+        base_url = "https://compete-strongest-com.global.ssl.fastly.net/api/p"
+        super().__init__(base_url)
+
+    def get_competition(self, competition_key: str):
+        return self._request_json(f"/competitions/{competition_key}/")
+
+    def get_divisions(self, competition_key: str):
+        return self._request_json(f"/competitions/{competition_key}/divisions/")
+
+    def get_workouts(self, competition_key: str):
+        return self._request_json(f"/competitions/{competition_key}/workouts/")
+
+    def get_scoring_policies(self, competition_key: str):
+        return self._request_json(f"/competitions/{competition_key}/scoring_policies/")
+
+    def get_leaderboard(self, division_key: str):
+        return self._request_json(f"/divisions/{division_key}/leaderboard/")
