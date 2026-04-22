@@ -6,6 +6,7 @@ import json, re
 from datetime import datetime, timezone, timedelta
 from typing import Callable
 from tqdm import tqdm
+import math
 
 gcp_params = GoogleCloudParameters()
 
@@ -94,13 +95,22 @@ class CFStorageManager(StorageManager):
     def manifest(self):
         if hasattr(self, '_manifest'):
             return getattr(self, '_manifest')   
-
-        return self.hard_refresh_manifest()
+        blob = self.bucket.blob('crossfit/manifest.json')
+        if blob.exists():
+            manifest = json.loads(blob.download_as_string())
+        else:
+            manifest = self.hard_refresh_manifest()
+        manifest = {
+                int(c): {
+                    int(d): v for d, v in v.items()
+                } for c, v in manifest.items()
+            }
+        return manifest
 
     def soft_refresh_manifest(self):
         manifest = self.manifest
-        missing_comps = [c for c in self.competitions_json if c['id'] not in manifest]
-        additions = self.inventory_page_one(missing_comps)
+        new_comps = [c for c in self.competitions_json if c['id'] not in manifest]
+        additions = self.inventory_page_one(new_comps)
         manifest = {**manifest, **additions}
         manifest = self.inventory_multiple_pages(manifest)
         blob = self.bucket.blob('crossfit/manifest.json')
@@ -113,7 +123,7 @@ class CFStorageManager(StorageManager):
         if hasattr(self, '_elite_competition_cache'):
             return self._elite_competition_cache
 
-        comps_dict = {c['id']: c for c in self.all_competitions_json}
+        comps_dict = {c['id']: c for c in self.competitions_json}
 
         relations = {}
         for comp in comps_dict.values():
@@ -248,23 +258,129 @@ class CFStorageManager(StorageManager):
 
         return manifest
 
-def parse_cf_leaderboard_page(data: dict):
-    comp = data['competition']
-    page = data['pagination']
+    def parse_leaderboard_page(self, data: dict):
+        comp = data['competition']
+        page = data['pagination']
 
-    entrants = []
-    scores = []
-    for row in data['leaderboardRows']:
-        overall = {k:v for k,v in row.items() if 'overall' in k}
-        entrant = row['entrant']
-        entrant_params = {**comp,**overall,**page,**entrant}
-        entrant_model = CFEntrant(**entrant_params)
-        entrants.append(entrant_model)
+        entrants = []
+        scores = []
+        for row in data['leaderboardRows']:
+            overall = {k:v for k,v in row.items() if 'overall' in k}
+            entrant = row['entrant']
+            entrant_params = {**comp,**overall,**page,**entrant}
+            entrant_model = CFEntrant(**entrant_params)
+            entrants.append(entrant_model)
 
-        for score in row['scores']:
-            score_params = {**comp,**entrant,**score}
-            score_model = CFScore(**score_params)
-            scores.append(score_model)
+            for score in row['scores']:
+                score_params = {**comp,**entrant,**score}
+                score_model = CFScore(**score_params)
+                scores.append(score_model)
 
-    return entrants, scores
+        return entrants, scores
+
+    def parse_competition(
+        self, comp: CFCompetition
+    ):
+        divs = self.manifest.get(comp.comp_id)
+
+        all_entrants = []
+        all_scores = []
+        for d, v in divs.items():
+            n_pages = v['n_pages']
+            for page in tqdm(range(1, n_pages + 1), desc=f'Parsing division {d} page',
+                    disable=n_pages < 10):
+                blob = self.bucket.blob(self.get_storage_path(comp, d, page))
+                data = json.loads(blob.download_as_string())
+                entrants, scores = self.parse_leaderboard_page(data)
+                all_entrants.extend(entrants)
+                all_scores.extend(scores)
+
+        return all_entrants, all_scores 
         
+from pandas.io.sql import Self
+from storage import StorageManager
+import json
+
+class StrongestStorageManager(StorageManager):
+    def __init__(self):
+        super().__init__(StrongestAPIRequestClient())
+
+    @property
+    def index(self):
+        if hasattr(self, '_index'):
+            return self._index
+        blob = self.bucket.blob('strongest/index.json')
+        data = json.loads(blob.download_as_string())
+        setattr(self, '_index', data)
+        return data
+                    
+    def run_competition_inventory(self):
+        expected_files = {
+            f'strongest/{comp["id"]}/competition.json'
+            for comp in self.index
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob='strongest/*/competition.json')
+        }
+        missing_files = expected_files - existing_files
+        for file in missing_files:
+            print(f'Fetching data for {file}')
+            try:
+                comp_id = file.split('/')[1]
+                comp_data = self.api_client.get_competition(comp_id)
+                blob = self.bucket.blob(file)
+                blob.upload_from_string(json.dumps(comp_data))
+            except Exception as e:
+                print(f'Error: {e}')
+        return
+
+    def run_workout_inventory(self):
+        expected_files = {
+            f'strongest/{comp["id"]}/workouts.json'
+            for comp in self.index
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob='strongest/*/workouts.json')
+        }
+        missing_files = expected_files - existing_files
+        for file in missing_files:
+            print(f'Fetching data for {file}')
+            try:
+                comp_id = file.split('/')[1]
+                workouts = self.api_client.get_workouts(comp_id)
+                blob = self.bucket.blob(file)
+                blob.upload_from_string(json.dumps(workouts))
+            except Exception as e:
+                print(f'Error: {e}')
+        return
+
+    def run_leaderboard_inventory(self):
+        for comp in self.index:
+            comp_id = comp['id']
+            divisions = [comp['division_male'], comp['division_female']]
+            for div_id in divisions:
+                blob = self.bucket.blob(f'strongest/{comp_id}/leaderboard/{div_id}_1.json')
+                if blob.exists():
+                    lb = json.loads(blob.download_as_string())
+                    results = int(lb['results'])
+                else:
+                    print(f'Fetching data for {blob.name}')
+                    try:
+                        lb = self.api_client.get_leaderboard_page(div_id,1)
+                        blob.upload_from_string(json.dumps(lb))
+                    except Exception as e:
+                        print(f'Error: {e}')
+                results = int(lb['results'])
+                page_size = int(lb['page_size'])
+                n_pages = math.ceil(results / page_size)
+                for page in range(1, n_pages + 1):
+                    blob = self.bucket.blob(f'strongest/{comp_id}/leaderboard/{div_id}_{page}.json')
+                    if not blob.exists():
+                        print(f'Fetching data for {blob.name}')
+                        try:
+                            lb = self.api_client.get_leaderboard_page(div_id,page)
+                            blob.upload_from_string(json.dumps(lb))
+                        except Exception as e:
+                            print(f'Error: {e}')
