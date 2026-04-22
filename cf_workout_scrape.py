@@ -39,7 +39,7 @@ def fetch_games_workouts():
             workouts.append(out)
         workouts_all.extend(workouts)
 
-    return workouts
+    return workouts_all
 
 def fetch_stage_workout(
     stage: str,
