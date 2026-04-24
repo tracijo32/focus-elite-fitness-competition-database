@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 from datetime import datetime, timezone, timedelta
 from models import CFEntrant, CFScore
 from parameters import GoogleCloudParameters
@@ -49,7 +50,8 @@ class UploadManager:
         schema = target_table.schema
         temp_table = bigquery.Table(self.temp_table_id, schema=schema)
         temp_table.expires = datetime.now(timezone.utc) + timedelta(hours=1)
-        return self.client.create_table(temp_table, exists_ok=True)
+        # Require a fresh temp table so we never reuse stale schema.
+        return self.client.create_table(temp_table, exists_ok=False)
 
     def _wait_for_table(self, table_id: str, retries: int = 5, delay_seconds: float = 0.2):
         for attempt in range(retries):
@@ -80,6 +82,22 @@ class UploadManager:
     def _merge(self, overwrite: bool = False):
         t = self.full_table_id
         s = self.temp_table_id
+        target_schema = {
+            f.name: f.field_type for f in self.client.get_table(t).schema
+        }
+        source_schema = {
+            f.name: f.field_type for f in self.client.get_table(s).schema
+        }
+        mismatched_types = [
+            (c, target_schema[c], source_schema[c])
+            for c in self.columns
+            if c in target_schema and c in source_schema and target_schema[c] != source_schema[c]
+        ]
+        if mismatched_types:
+            raise RuntimeError(
+                f"Temp/source schema does not match target schema: {mismatched_types}"
+            )
+
         # ON must be one boolean expression: use AND between key predicates (not commas).
         key_fields_str = " AND ".join([f"T.{field} = S.{field}" for field in self.key_fields])
         insert_cols = ", ".join(self.columns)
@@ -105,11 +123,22 @@ ON {key_fields_str}
 
     def upload_and_merge(self, overwrite: bool = False):
         self._delete_temp_table()
+        self._wait_for_table_absent(self.temp_table_id)
         self._create_temporary_table()
         self._wait_for_table(self.temp_table_id)
         self._upload_to_temp_table()
         self._merge(overwrite=overwrite)
         self._delete_temp_table()
+
+    def _wait_for_table_absent(self, table_id: str, retries: int = 5, delay_seconds: float = 0.2):
+        for attempt in range(retries):
+            try:
+                self.client.get_table(table_id)
+            except NotFound:
+                return
+            if attempt == retries - 1:
+                raise RuntimeError(f"Temporary table still exists: {table_id}")
+            time.sleep(delay_seconds * (2 ** attempt))
 
 class CFEntrantUploadManager(UploadManager):
     def __init__(self):
