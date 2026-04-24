@@ -1,5 +1,5 @@
 from google.cloud import storage
-from api import APIRequestClient, CrossFitAPIRequestClient
+from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient
 from models import CFCompetition, CFEntrant, CFScore
 from parameters import GoogleCloudParameters
 import json, re
@@ -279,7 +279,7 @@ class CFStorageManager(StorageManager):
         return entrants, scores
 
     def parse_competition(
-        self, comp: CFCompetition
+        self, comp: CFCompetition,
     ):
         divs = self.manifest.get(comp.comp_id)
 
@@ -296,10 +296,29 @@ class CFStorageManager(StorageManager):
                 all_scores.extend(scores)
 
         return all_entrants, all_scores 
-        
-from pandas.io.sql import Self
-from storage import StorageManager
-import json
+
+    def get_parsed_json_for_competition(
+        self, 
+        comp_id: int, 
+        reparse=False
+    ):
+        comp = self.elite_competitions[comp_id]
+        comp_json = comp.model_dump()
+
+        ent_blob = self.bucket.blob(f'crossfit/parsed/entrant_{comp_id}.json')
+        score_blob = self.bucket.blob(f'crossfit/parsed/score_{comp_id}.json')
+
+        if reparse or not ent_blob.exists() or not score_blob.exists():
+            entrants, scores = self.parse_competition(comp)
+            entrants_json = [e.model_dump() for e in entrants]
+            scores_json = [s.model_dump() for s in scores]
+            ent_blob.upload_from_string(json.dumps(entrants_json))
+            score_blob.upload_from_string(json.dumps(scores_json))
+        else:
+            entrants_json = json.loads(ent_blob.download_as_string())
+            scores_json = json.loads(score_blob.download_as_string())
+
+        return comp_json, entrants_json, scores_json
 
 class StrongestStorageManager(StorageManager):
     def __init__(self):
@@ -384,3 +403,47 @@ class StrongestStorageManager(StorageManager):
                             blob.upload_from_string(json.dumps(lb))
                         except Exception as e:
                             print(f'Error: {e}')
+
+    def run_athlete_profile_inventory(self):
+        usernames = set[str]()
+        for blob in self.bucket.list_blobs(match_glob='strongest/*/leaderboard/*.json'):
+            data = json.loads(blob.download_as_string())
+            lb = data['body_rows']
+            un = set[str](
+                p['username'] for row in lb
+                for p in row[0]['teamProfiles']
+            )
+            usernames.update(un)
+        
+        expected_files = {
+            f'strongest/athlete_profile/{un}.json'
+            for un in usernames
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(prefix='strongest/athlete_profile/')
+        }
+        not_found_blob = self.bucket.blob('strongest/athlete_profile/profile_not_found.json')
+        if not_found_blob.exists():
+            profile_not_found = json.loads(not_found_blob.download_as_string())
+        else:
+            profile_not_found = []
+
+        missing_files = expected_files - existing_files - set(profile_not_found)
+        if len(missing_files) == 0:
+            return
+        
+        print('Fetching missing profiles')
+        for file in tqdm(missing_files):
+            un = file.split('/')[-1].replace('.json', '')
+            try:
+                data = self.api_client.get_athlete_profile(un)
+                blob = self.bucket.blob(f'strongest/athlete_profile/{un}.json')
+                blob.upload_from_string(json.dumps(data))
+            except Exception as e:
+                profile_not_found.append(un)
+
+        print(f'{len(profile_not_found)} profiles not found, caching in profile_not_found.json')
+        not_found_blob.upload_from_string(json.dumps(profile_not_found))
+
+        return
