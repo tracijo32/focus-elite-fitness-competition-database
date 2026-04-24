@@ -169,22 +169,27 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
     def get_athlete_page(self, profile_key: str):
         return self._request_json(f"/accounts/athletepage/{profile_key}")
 
-class CompeteStrongestClient(APIRequestClient):
+class StrongestAPIRequestClient(APIRequestClient):
     def __init__(self):
         base_url = "https://compete-strongest-com.global.ssl.fastly.net/api/p"
         super().__init__(base_url)
 
+    def _request_json_data_only(self, url: str, *args, **kwargs):
+        return self._request_json(url, *args, **kwargs)['data']
+
     def get_competition(self, competition_key: str):
-        return self._request_json(f"/competitions/{competition_key}/")
+        return self._request_json_data_only(f"/competitions/{competition_key}/")
 
     def get_divisions(self, competition_key: str):
-        return self._request_json(f"/competitions/{competition_key}/divisions/")
+        return self._request_json_data_only(f"/competitions/{competition_key}/divisions/")
 
     def get_workouts(self, competition_key: str):
-        return self._request_json(f"/competitions/{competition_key}/workouts/")
+            return self._request_json_data_only(f"/competitions/{competition_key}/workouts/")
 
-    def get_scoring_policies(self, competition_key: str):
-        return self._request_json(f"/competitions/{competition_key}/scoring_policies/")
+    def get_leaderboard_page(self, division_key: str, page: int = 1):
+        return self._request_json_data_only(
+            f"/divisions/{division_key}/leaderboard/",
+            params={'p': page}) 
 
-    def get_leaderboard(self, division_key: str):
-        return self._request_json(f"/divisions/{division_key}/leaderboard/")
+    def get_athlete_profile(self, profile_key: str):
+        return self._request_json_data_only(f"/athletes/{profile_key}/")
