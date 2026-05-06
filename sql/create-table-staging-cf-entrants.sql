@@ -1,4 +1,5 @@
-CREATE OR REPLACE TABLE `focus-elite-comp.staging.cf_entrants` (
+CREATE OR REPLACE EXTERNAL TABLE `focus-elite-comp.staging.cf_entrants_external`
+(
     comp_id INT64 NOT NULL,
     division_id INT64 NOT NULL,
     cf_id INT64 NOT NULL,
@@ -12,5 +13,8 @@ CREATE OR REPLACE TABLE `focus-elite-comp.staging.cf_entrants` (
     overall_rank INT64,
     overall_score INT64,
     lb_page INT64,
-    PRIMARY KEY (comp_id, division_id, cf_id) NOT ENFORCED
 )
+OPTIONS (
+  format = 'NEWLINE_DELIMITED_JSON',
+  uris = ['gs://elite-fitness-competitions/crossfit/parsed/entrant_*.ndjson']
+);
