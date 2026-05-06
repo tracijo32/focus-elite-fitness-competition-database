@@ -1,4 +1,5 @@
 from google.cloud import storage
+from numpy import poly1d
 from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient
 from models import CFCompetition, CFEntrant, CFScore
 from parameters import GoogleCloudParameters
@@ -278,6 +279,49 @@ class CFStorageManager(StorageManager):
 
         return entrants, scores
 
+    @staticmethod
+    def parse_2020_games_entrants_and_scores(entrants: list[CFEntrant], scores: list[CFScore]):
+        stage1_entrants = {}
+        stage2_entrants = {}
+        for entrant in entrants:
+            e1 = entrant.model_copy(deep=True)
+            e1.comp_id = 580001
+            e1.lb_page = 1
+            stage1_entrants[entrant.cf_id] = e1
+
+            if entrant.overall_score > 0:
+                e2 = entrant.model_copy(deep=True)
+                e2.comp_id = 580002
+                e2.lb_page = 1
+                stage2_entrants[entrant.cf_id] = e2
+
+        stage1_scores = []
+        stage2_scores = []
+        for score in scores:
+            if score.ordinal < 8:
+                s1 = score.model_copy(deep=True)
+                s1.comp_id = 580001
+                stage1_scores.append(s1)
+            elif score.ordinal == 8:
+                entrant = stage1_entrants[score.cf_id]
+                entrant.overall_score = int(score.score_display)
+                entrant.overall_rank = int(score.rank)
+            else:
+                entrant = stage2_entrants.get(score.cf_id)
+                if not entrant:
+                    continue
+                s2 = score.model_copy(deep=True)
+                s2.comp_id = 580002
+                s2.ordinal = score.ordinal - 8
+                stage2_scores.append(s2)
+
+        stage1_entrants = list(stage1_entrants.values())
+        stage2_entrants = list(stage2_entrants.values())
+        stage1_scores = list(stage1_scores)
+        stage2_scores = list(stage2_scores)
+
+        return stage1_entrants + stage2_entrants, stage1_scores + stage2_scores
+
     def parse_competition(
         self, comp: CFCompetition,
     ):
@@ -295,30 +339,31 @@ class CFStorageManager(StorageManager):
                 all_entrants.extend(entrants)
                 all_scores.extend(scores)
 
+        if comp.comp_id == 58:
+            all_entrants, all_scores = self.parse_2020_games_entrants_and_scores(all_entrants, all_scores)
+
         return all_entrants, all_scores 
 
-    def get_parsed_json_for_competition(
-        self, 
-        comp_id: int, 
-        reparse=False
+    def dump_json_entrants_and_scores(
+        self,
+        comp_id: int,
+        reparse: bool = False
     ):
+        entrant_blob = self.bucket.blob(f'crossfit/parsed/entrant_{comp_id}.ndjson')
+        score_blob = self.bucket.blob(f'crossfit/parsed/score_{comp_id}.ndjson')
+
+        if not reparse and entrant_blob.exists() and score_blob.exists():
+            return
+
         comp = self.elite_competitions[comp_id]
-        comp_json = comp.model_dump()
+        entrants, scores = self.parse_competition(comp)
 
-        ent_blob = self.bucket.blob(f'crossfit/parsed/entrant_{comp_id}.json')
-        score_blob = self.bucket.blob(f'crossfit/parsed/score_{comp_id}.json')
+        entrants_ndjson = '\n'.join([e.model_dump_json() for e in entrants])
+        scores_ndjson = '\n'.join([s.model_dump_json() for s in scores])
 
-        if reparse or not ent_blob.exists() or not score_blob.exists():
-            entrants, scores = self.parse_competition(comp)
-            entrants_json = [e.model_dump() for e in entrants]
-            scores_json = [s.model_dump() for s in scores]
-            ent_blob.upload_from_string(json.dumps(entrants_json))
-            score_blob.upload_from_string(json.dumps(scores_json))
-        else:
-            entrants_json = json.loads(ent_blob.download_as_string())
-            scores_json = json.loads(score_blob.download_as_string())
-
-        return comp_json, entrants_json, scores_json
+        entrant_blob.upload_from_string(entrants_ndjson)
+        score_blob.upload_from_string(scores_ndjson)
+        return    
 
 class StrongestStorageManager(StorageManager):
     def __init__(self):
