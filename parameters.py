@@ -20,3 +20,4 @@ class GoogleCloudParameters:
     project_id: str = field(default_factory=lambda: _env_required("GCP_PROJECT_ID"))
     bucket_name: str = field(default_factory=lambda: _env_required("GCS_BUCKET_NAME"))
     staging_dataset_id: str = field(default_factory=lambda: _env_required("GCS_STAGING_DATASET_ID"))
+    maps_api_key: str = field(default_factory=lambda: _env_required("GOOGLE_MAPS_API_KEY"))
