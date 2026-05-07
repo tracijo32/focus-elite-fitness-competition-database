@@ -1,6 +1,6 @@
 ## Pydantic models for parsing JSON responses from APIs 
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, AliasChoices
 from datetime import datetime, timezone
 import re
 
@@ -52,6 +52,19 @@ def parse_measurement(
 
     return None
 
+def parse_digits(v):
+    if isinstance(v, str):
+        m = re.search(r"\d+", v)
+        return int(m.group()) if m else None
+    if isinstance(v, int):
+        return v
+    return None
+
+def parse_float(v):
+    try:
+        return float(v)
+    except:
+        return None
 
 class CFCompetition(BaseModel):
     comp_id: int = Field(alias='id')
@@ -158,3 +171,129 @@ class CFScore(BaseModel):
     @classmethod
     def parse_workout_score(cls, score: str | int | None):
         return parse_integer(score)
+
+class StrongestCompetition(BaseModel):
+    comp_id: str = Field(alias='id')
+    title: str
+    venue_name: str = Field(alias='venueName')
+    address: str = Field(alias='venueAddress')
+    lat: float | None = Field(alias='place')
+    lng: float | None = Field(alias='place')
+    start_date: str = Field(alias='dateTimeStart')
+    end_date: str = Field(alias='dateTimeEnd')
+    timezone: str
+    virtual: bool
+    link: str = Field(alias='fullLink')
+    banner_image_url: str = Field(alias='bannerImageUrl')
+    workouts: list[str]
+
+    @field_validator('lat', mode='before')
+    def parse_lat(cls, v):
+        if isinstance(v, dict):
+            return v['geometry']['location']['lat']
+        return None
+
+    @field_validator('lng', mode='before')
+    def parse_lng(cls, v):
+        if isinstance(v, dict):
+            return v['geometry']['location']['lng']
+        return None
+
+    @model_validator(mode="after")
+    def update_link_and_title(self):
+        comp_id = self.comp_id
+        y = re.search(r'(\d{4})', self.title)
+        year = y.group() if y else '2020'
+        if comp_id.startswith('ri'):
+            self.link = f"https://www.roguefitness.com/invitational/leaderboard"
+            self.title = f"Rogue Invitational {year}"
+        elif comp_id.startswith('mayhem'):
+            if 'qualifier' in self.title.lower():
+                self.title = f"Mayhem Classic {year} Qualifier"
+            else:
+                self.title = f"Mayhem Classic {year}"
+        else:
+            self.link = self.link
+            self.title = self.title
+        return self
+
+class StrongestWorkout(BaseModel):
+    workout_id: str = Field(alias='id')
+    comp_id: str = Field(alias='competitionId')
+    title: str
+    html_content: str = Field(alias='content')
+
+class StrongestEntrant(BaseModel):
+    comp_id: str
+    division_id: str
+    name: str = Field(alias='competitor_name')
+    username: str | None = Field(alias='teamProfiles')
+    country: str | None = Field(alias='teamProfiles')
+    registration_id: str = Field(alias='registrationId')
+    wd: bool = False
+    overall_rank: int | None = Field(alias=AliasChoices('ordinalRank','overall'))
+    overall_score: int | None = Field(alias='cum_workout_rank')
+
+    @field_validator('username', mode='before')
+    def parse_username(cls, v):
+        if isinstance(v, list):
+            p = v[0]
+            if isinstance(p,dict):
+                return p.get('username')
+        return None
+
+    @field_validator('country', mode='before')
+    def parse_country(cls, v):
+        if isinstance(v, list):
+            p = v[0]
+            if isinstance(p,dict):
+                return p.get('country')
+        return None
+
+    @field_validator('overall_rank', mode='before')
+    def parse_overall_rank(cls, v):
+        return parse_digits(v)
+
+class StrongestScore(BaseModel):
+    comp_id: str
+    division_id: str
+    registration_id: str
+    workout_id: str
+    rank: int | None = Field(alias='workout_rank')
+    score_label: str = Field(alias='workout_score_label')
+    score_value: float | None = Field(alias='workout_score_value')
+    score_units: str | None = Field(alias='workout_score_units',default=None)
+    tiebreaker_value: float | None = Field(alias='workout_tiebreaker_value',default=None)
+    tiebreaker_units: str | None = Field(alias='workout_tiebreaker_units',default=None)
+    tiebreaker_2_value: float | None = Field(alias='workout_tiebreaker_2_value',default=None)
+    tiebreaker_2_units: str | None = Field(alias='workout_tiebreaker_2_units',default=None)
+    score_points: int | None = Field(alias='workout_score_points',default=None)
+
+    @field_validator('rank', mode='before')
+    def parse_rank(cls, v):
+        return parse_digits(v)
+
+    @field_validator('score_value', mode='before')
+    def parse_score_value(cls, v):
+        return parse_float(v)
+
+    @field_validator('tiebreaker_value', mode='before')
+    def parse_tiebreaker_value(cls, v):
+        return parse_float(v)
+
+class StrongestScoringPolicy(BaseModel):
+    comp_id: str = Field(alias='competitionId')
+    division_id: str = Field(alias='division')
+    workout_id: str = Field(alias='workout')
+    points_table: list[int] = Field(alias='customPointsTable')
+    tiebreaker_2_enabled: bool = Field(alias='tiebreaker2Enabled')
+    scoring_policy: str = Field(alias='scoringPolicy')
+    score_type: str = Field(alias='scoreType')
+    tiebreaker_score_type: str = Field(alias='tiebreakerScoreType')
+    tiebreaker_2_score_type: str = Field(alias='tiebreaker2ScoreType')
+    
+    @field_validator('points_table', mode='before')
+    def parse_points_table(cls, v):
+        if isinstance(v, str):
+            return [int(x) for x in v.split(',')]
+        return v
