@@ -1,7 +1,9 @@
 from google.cloud import storage
-from numpy import poly1d
 from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient
-from models import CFCompetition, CFEntrant, CFScore
+from models import (
+    CFCompetition, CFEntrant, CFScore,
+    StrongestCompetition, StrongestWorkout, StrongestEntrant, StrongestScore, StrongestScoringPolicy
+)
 from parameters import GoogleCloudParameters
 import json, re
 from datetime import datetime, timezone, timedelta
@@ -491,4 +493,92 @@ class StrongestStorageManager(StorageManager):
         print(f'{len(profile_not_found)} profiles not found, caching in profile_not_found.json')
         not_found_blob.upload_from_string(json.dumps(profile_not_found))
 
+        return
+
+    def run_scoring_policy_inventory(self):
+        expected_files = {
+            f'strongest/{comp["id"]}/scoring_policies.json'
+            for comp in self.index
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob='strongest/*/scoring_policies.json')
+        }
+        missing_files = expected_files - existing_files
+        for file in missing_files:
+            print(f'Fetching data for {file}')
+            try:
+                comp_id = file.split('/')[1]
+                policies = self.api_client.get_scoring_policies(comp_id)
+                blob = self.bucket.blob(file)
+                blob.upload_from_string(json.dumps(policies))
+            except Exception as e:
+                print(f'Error: {e}')
+        return
+
+    def parse_competition(self, comp_id: str):
+        blob = self.bucket.blob(f'strongest/{comp_id}/competition.json')
+        comp_json = json.loads(blob.download_as_string())
+        comp = StrongestCompetition(**comp_json)
+
+        blob = self.bucket.blob(f'strongest/{comp_id}/workouts.json')
+        wo_json = json.loads(blob.download_as_string())
+        workouts = [StrongestWorkout(**d) for d in wo_json]
+        wo_names = {w.title: w.workout_id for w in workouts}
+
+        blob = self.bucket.blob(f'strongest/{comp_id}/scoring_policies.json')
+        policies_json = json.loads(blob.download_as_string())
+        policies = [
+            StrongestScoringPolicy(**p) 
+            for p in policies_json 
+            if p['workout'] in comp.workouts
+        ]
+
+        entrants = []
+        scores = []
+        lb_blobs = self.bucket.list_blobs(prefix=f'strongest/{comp_id}/leaderboard')
+        for blob in lb_blobs:
+            division_id = blob.name.split('/')[-1].split('_')[0]
+            data = json.loads(blob.download_as_string())
+            body = data['body_rows']
+            for row in body:
+                p = {"comp_id": comp_id, "division_id": division_id}
+                entrant = StrongestEntrant(**p,**row[0])
+                entrants.append(entrant)
+                for s in row[1:]:
+                    workout_id = wo_names[s['workout_name']]
+                    p = {
+                        "comp_id": comp_id, 
+                        "division_id": division_id,
+                        "registration_id": entrant.registration_id,
+                        "workout_id": workout_id,
+                    }
+                    score = StrongestScore(**p,**s)
+                    scores.append(score)
+        
+        return comp, workouts, entrants, scores, policies
+
+    def dump_parsed_json(self):
+        out = {
+            'competitions': [],
+            'workouts': [],
+            'entrants': [],
+            'scores': [],
+            'policies': [],
+        }
+        print('Parsing competitions...')
+        for comp in tqdm(self.index, desc='Competitions'):
+            comp, workouts, entrants, scores, policies = self.parse_competition(comp['id'])
+            out['competitions'].append(comp)
+            out['workouts'].extend(workouts)
+            out['entrants'].extend(entrants)
+            out['scores'].extend(scores)
+            out['policies'].extend(policies)
+        
+        print('Dumping parsed data...',end='')
+        for k, v in out.items():
+            blob = self.bucket.blob(f'strongest/parsed/{k}.ndjson')
+            ndjson = '\n'.join([d.model_dump_json() for d in v])
+            blob.upload_from_string(ndjson)
+        print('Done')
         return
