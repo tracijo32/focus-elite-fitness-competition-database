@@ -193,3 +193,6 @@ class StrongestAPIRequestClient(APIRequestClient):
 
     def get_athlete_profile(self, profile_key: str):
         return self._request_json_data_only(f"/athletes/{profile_key}/")
+
+    def get_scoring_policies(self, competition_key: str):
+        return self._request_json_data_only(f"/competitions/{competition_key}/scoring-policies/")
