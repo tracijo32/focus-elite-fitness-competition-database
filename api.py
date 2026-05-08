@@ -196,3 +196,21 @@ class StrongestAPIRequestClient(APIRequestClient):
 
     def get_scoring_policies(self, competition_key: str):
         return self._request_json_data_only(f"/competitions/{competition_key}/scoring-policies/")
+
+class ScoreItAPIRequestClient(APIRequestClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(base_url="https://scoreit.co.za", *args, **kwargs)
+
+    def get_events(self):
+        passed = self._request_json('/events/passedEvents')
+        upcoming = self._request_json('/events/upcomingEvents')
+        return passed + upcoming
+
+    def get_event(self, event_ref: str):
+        path = f'/events/upcomingEvent/{event_ref}'
+        return self._request_json(path)
+
+    def get_event_leaderboard(self, event_ref: str, division_ref: str):
+        path = f'/EventTeamScoring/leaderboard/{event_ref}'
+        params = {'divisionRef': division_ref}
+        return self._request_json(path, params=params)
