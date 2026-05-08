@@ -72,7 +72,7 @@ class CrossFitAPIRequestClient(APIRequestClient):
 
     def get_leaderboard_page(
         self, 
-        path: str,
+        url_path: str,
         division: int,
         params: dict = {},
         page: int | None = None
