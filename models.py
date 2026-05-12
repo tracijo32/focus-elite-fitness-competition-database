@@ -297,3 +297,69 @@ class StrongestScoringPolicy(BaseModel):
         if isinstance(v, str):
             return [int(x) for x in v.split(',')]
         return v
+
+class ManualCompetition(BaseModel):
+    comp_id: str
+    title: str
+    start_date: datetime
+    end_date: datetime
+    venue_name: str | None = None
+    address: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    virtual: bool
+    source_url: str | None = None
+    source_name: str | None = None
+    source_description: str | None = None
+    acknowledgement: str | None = None
+
+class ManualEntrant(BaseModel):
+    comp_id: str
+    gender: str
+    athlete_id: int
+    name: str
+    overall_rank: int | None = None
+    overall_points: int | None = None
+
+class ManualScore(BaseModel):
+    comp_id: str
+    gender: str
+    athlete_id: int
+    ordinal: int
+    score: str | None = None
+    tiebreak: str | None = None
+    rank: int | None = None
+    points: int | None = None
+
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class ScoreItCompetition(BaseModel):
+    comp_id: int = Field(alias='eventId')
+    event_ref: str = Field(alias='ref')
+    title: str = Field(alias='eventName')
+    address: str | None = Field(alias='eventAddress',default=None)
+    start_date: datetime = Field(alias='dateActiveFrom')
+    end_date: datetime = Field(alias='dateActiveTo')
+
+class ScoreItEntrant(BaseModel):
+    event_ref: str
+    division_ref: str
+    entrant_ref: str = Field(alias='teamRef')
+    entrant_name: str = Field(alias='teamName')
+    overall_rank: int | None = Field(alias='position',default=None)
+    overall_points: int | None = Field(alias='totalPoints',default=None)
+
+class ScoreItScore(BaseModel):
+    event_ref: str
+    division_ref: str
+    entrant_ref: str
+    workout_ref: str = Field(alias='courseWorkoutRef')
+    code: str = Field(alias='scoringMeasurementCode')
+    value: float | None = Field(alias='value',default=None)
+    time: str | None = None
+    rep_count: int | None = Field(alias='repCount',default=None)
+    weight: float | None = Field(alias='weight',default=None)
+    points: int | None = Field(alias='pointsEarned',default=None)
+    rank: int | None = Field(alias='position',default=None)
+    tiebreak: str | None = Field(alias='tiebreak',default=None)
