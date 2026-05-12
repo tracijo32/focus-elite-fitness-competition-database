@@ -1,5 +1,5 @@
-import time, requests
-import requests, time
+import time
+import requests
 
 class APIRequestClient:
     def __init__(
@@ -36,8 +36,20 @@ class APIRequestClient:
             )
         return False
 
-    def _request_json(self, endpoint: str, params: dict | None = None):
+    def _request_json(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+        *,
+        method: str = "GET",
+        data: dict | None = None,
+    ):
         url = self.base_url + endpoint
+        m = method.upper()
+        if m not in ("GET", "POST"):
+            raise ValueError(f"method must be 'GET' or 'POST', got {method!r}")
+        if m == "GET" and data is not None:
+            raise ValueError("data= is only supported with method='POST'")
         attempt = 0
         while True:
             now = time.time()
@@ -45,7 +57,15 @@ class APIRequestClient:
             if elapsed < self.request_delay_seconds:
                 time.sleep(self.request_delay_seconds - elapsed)
 
-            response = requests.get(url, params=params, timeout=self.timeout_seconds)
+            if m == "POST":
+                response = requests.post(
+                    url,
+                    params=params,
+                    data=data,
+                    timeout=self.timeout_seconds,
+                )
+            else:
+                response = requests.get(url, params=params, timeout=self.timeout_seconds)
             self._last_request_ts = time.time()
 
             try:
@@ -214,3 +234,49 @@ class ScoreItAPIRequestClient(APIRequestClient):
         path = f'/EventTeamScoring/leaderboard/{event_ref}'
         params = {'divisionRef': division_ref}
         return self._request_json(path, params=params)
+
+class WodcastAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url='https://www.wodcast.com/services'
+        )
+
+    def get_workout_results_page(
+        self, 
+        event_id: int , 
+        gender: str, 
+        event_number: int,  
+        page_number: int = 1,
+        page_size: int = 200,
+    ):
+        data = {
+            'eventID': event_id,
+            'gender': gender,
+            'eventNumber': event_number,
+            'pageNumber': page_number,
+            'pageSize': page_size,
+        }
+        params = {'format': 'json'}
+
+        path = '/GetAffiliateEventResultsService.php'
+
+        return self._request_json(path, method='POST', params=params, data=data)
+
+    def get_overall_results_page(
+        self,
+        event_id: int,
+        gender: str,
+        page_number: int = 1,
+        page_size: int = 200
+    ):
+        data = {
+            'eventID': event_id,
+            'gender': gender,
+            'pageNumber': page_number,
+            'pageSize': page_size
+        }
+        params = {'format': 'json'}
+
+        path = '/GetAffiliateEventOverallResultsService.php'
+
+        return self._request_json(path, method='POST', params=params, data=data)
