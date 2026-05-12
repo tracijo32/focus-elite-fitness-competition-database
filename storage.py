@@ -2,7 +2,8 @@ from google.cloud import storage
 from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient
 from models import (
     CFCompetition, CFEntrant, CFScore,
-    StrongestCompetition, StrongestWorkout, StrongestEntrant, StrongestScore, StrongestScoringPolicy
+    StrongestCompetition, StrongestWorkout, StrongestEntrant, StrongestScore, StrongestScoringPolicy,
+    ScoreItCompetition, ScoreItEntrant, ScoreItScore
 )
 from parameters import GoogleCloudParameters
 import json, re
@@ -367,6 +368,14 @@ class CFStorageManager(StorageManager):
         score_blob.upload_from_string(scores_ndjson)
         return    
 
+    def dump_json_competitions(self):
+        comps_json = "\n".join([
+            c.model_dump_json() for c in self.elite_competitions.values()
+        ])
+        blob = self.bucket.blob('crossfit/parsed/competitions.ndjson')
+        blob.upload_from_string(comps_json)
+        return
+
 class StrongestStorageManager(StorageManager):
     def __init__(self):
         super().__init__(StrongestAPIRequestClient())
@@ -582,3 +591,120 @@ class StrongestStorageManager(StorageManager):
             blob.upload_from_string(ndjson)
         print('Done')
         return
+
+from storage import StorageManager
+class ScoreItStorageManager(StorageManager):
+    def __init__(self):
+        super().__init__(ScoreItAPIRequestClient())
+
+    @property
+    def index(self):
+        if hasattr(self, '_index'):
+            return self._index
+        blob = self.bucket.blob('scoreit/index.json')
+        data = json.loads(blob.download_as_string())
+        setattr(self, '_index', data)
+        return data
+
+    def run_competition_inventory(self):
+        expected_files = {
+            f'scoreit/raw/{comp["ref"]}/competition.json'
+            for comp in self.index
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob='scoreit/raw/*/competition.json')
+        }
+
+        missing_files = expected_files - existing_files
+        for file in missing_files:
+            print(f'Fetching data for {file}')
+            try:
+                ref = file.split('/')[-2]
+                comp_data = self.api_client.get_event(ref)
+                blob = self.bucket.blob(file)
+                blob.upload_from_string(json.dumps(comp_data))
+            except Exception as e:
+                print(f'Error: {e}')
+        return
+    
+    def run_leaderboard_inventory(self):
+        expected_files = {
+            f'scoreit/raw/{comp["ref"]}/leaderboards/{division_ref}.json'
+            for comp in self.index
+            for division_ref in [comp.get('division_male'),comp.get('division_female')]
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob='scoreit/raw/*/leaderboards/*.json')
+        }
+
+        missing_files = expected_files - existing_files
+        for file in missing_files:
+            print(f'Fetching data for {file}')
+            try:
+                event_ref = file.split('/')[2]
+                division_ref = file.split('/')[-1].split('.')[0]
+                leaderboard_data = self.api_client.get_event_leaderboard(event_ref,division_ref)
+                blob = self.bucket.blob(file)
+                blob.upload_from_string(json.dumps(leaderboard_data))
+            except Exception as e:
+                print(f'Error: {e}')
+        return
+
+    def dump_json_competition(self,comp_ref):
+        blob = self.bucket.blob(f'scoreit/raw/{comp_ref}/competition.json')
+        data = json.loads(blob.download_as_string())
+
+        comp = ScoreItCompetition(**data)
+        comp_json = comp.model_dump_json()
+
+        blob = self.bucket.blob(f'scoreit/parsed/{comp_ref}/competition.ndjson')
+        blob.upload_from_string(comp_json)
+
+        return 
+
+    def dump_json_entrants_and_scores(self, event_ref, divisions: list[str]):
+        entrants = []
+        scores = []
+        for division_ref in divisions:
+            blob = self.bucket.blob(f'scoreit/raw/{event_ref}/leaderboards/{division_ref}.json')
+            data = json.loads(blob.download_as_string())
+
+            p = {
+                'event_ref': event_ref,
+                'division_ref': division_ref
+            }
+            entrants = []
+            scores = []
+            for row in data['teamDetails']:
+                entrant = ScoreItEntrant(**p,**row)
+                for col in row['leaderboardColumnValues']:
+                    p = entrant.model_dump()
+                    score = ScoreItScore(**p,**col)
+                    scores.append(score)
+                entrants.append(entrant)
+        
+        entrants_json = "\n".join([entrant.model_dump_json() for entrant in entrants])
+        scores_json = "\n".join([score.model_dump_json() for score in scores])
+
+        blob = self.bucket.blob(f'scoreit/parsed/{event_ref}/entrants.ndjson')
+        blob.upload_from_string(entrants_json)
+
+        blob = self.bucket.blob(f'scoreit/parsed/{event_ref}/scores.ndjson')
+        blob.upload_from_string(scores_json)
+        return
+
+    def dump_json(self,comps_to_parse: list[str] | None = None):
+        if comps_to_parse is None:
+            comps_to_parse = self.index
+        else:
+            comps_to_parse = [comp for comp in self.index if comp['ref'] in comps_to_parse]
+        
+        for comp in tqdm(comps_to_parse):
+            event_ref = comp['ref']
+            self.dump_json_competition(event_ref)
+            divisions = [comp.get('division_male'),comp.get('division_female')]
+            divisions = [division for division in divisions if division is not None]
+            self.dump_json_entrants_and_scores(event_ref,divisions)
+
