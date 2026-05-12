@@ -1,5 +1,5 @@
 from google.cloud import storage
-from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient
+from api import APIRequestClient, CrossFitAPIRequestClient, StrongestAPIRequestClient, ScoreItAPIRequestClient
 from models import (
     CFCompetition, CFEntrant, CFScore,
     StrongestCompetition, StrongestWorkout, StrongestEntrant, StrongestScore, StrongestScoringPolicy,
@@ -591,8 +591,7 @@ class StrongestStorageManager(StorageManager):
             blob.upload_from_string(ndjson)
         print('Done')
         return
-
-from storage import StorageManager
+        
 class ScoreItStorageManager(StorageManager):
     def __init__(self):
         super().__init__(ScoreItAPIRequestClient())
