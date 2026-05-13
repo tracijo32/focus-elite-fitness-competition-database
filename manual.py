@@ -27,6 +27,14 @@ def get_athlete_names(gcp=False):
     df = df.explode('name').drop(columns=['first_name','last_name'])
     return df
 
+def file_exists(file_path,gcp=False):
+    if gcp:
+        blob = bucket.blob(file_path)
+        return blob.exists()
+    else:
+        import os
+        return os.path.exists(file_path)
+
 def load_data(file_path,gcp=False):
     if gcp:
         blob = bucket.blob(file_path)
@@ -43,8 +51,9 @@ def dump_data(data,file_path,gcp=False):
         with open(file_path, 'w') as f:
             f.write(data)
 
-def parse_southfit_leaderboard(gcp=False):
-    lb_json = load_data('manual/raw/scc2019_leaderboard.json',gcp=gcp)
+def parse_scc2019_leaderboard(gcp=False):
+    comp_id = 'scc2019'
+    lb_json = load_data(f'manual/raw/{comp_id}_leaderboard.json',gcp=gcp)
     lb = pd.DataFrame(json.loads(lb_json))
     lb['name'] = fix_name_column(lb['name'])
     lb['name_lower'] = lb['name'].str.lower()
@@ -65,17 +74,22 @@ def parse_southfit_leaderboard(gcp=False):
         ManualEntrant(**row.dropna())
         for _, row in lb.iterrows()
     ]
-    return entrants, []
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    return
 
-def parse_hustleup_lcq_leaderboard(
+def parse_lcq2025_leaderboard(
     gcp=False
 ):
-    male_json = load_data('manual/raw/lcq2025_leaderboard_male.json',gcp=gcp)
-    df_m = pd.DataFrame(json.loads(male_json)).assign(gender='M')
-    female_json = load_data('manual/raw/lcq2025_leaderboard_female.json',gcp=gcp)
-    df_f = pd.DataFrame(json.loads(female_json)).assign(gender='F')
+    comp_id = 'lcq2025'
+    dfs = []
+    for gender in ['male','female']:
+        data_json = load_data(f'manual/raw/{comp_id}_leaderboard_{gender}.json',gcp=gcp)
+        data = json.loads(data_json)
+        df = pd.DataFrame(data).assign(gender=gender[0].upper())
+        dfs.append(df)
 
-    df = pd.concat([df_m,df_f])
+    df = pd.concat(dfs)
     df['name'] = fix_name_column(df['name'])
     df['name_lower'] = df['name'].str.lower()
 
@@ -85,7 +99,7 @@ def parse_hustleup_lcq_leaderboard(
         df,
         athletes.drop(columns=['name']),
         on=['gender','name_lower'],how='left')\
-        .assign(comp_id='lcq2025')\
+        .assign(comp_id=comp_id)\
             .rename(columns={'total_points': 'overall_points'})
 
     assert df.groupby('name')['athlete_id'].nunique().eq(1).all(), \
@@ -95,6 +109,8 @@ def parse_hustleup_lcq_leaderboard(
         ManualEntrant(**row.dropna())
         for _, row in df.iterrows()
     ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
 
     df['scores'] = df['scores'].apply(
         lambda x: [{'ordinal': k, **v} for k,v in x.items()]
@@ -113,8 +129,9 @@ def parse_hustleup_lcq_leaderboard(
         ManualScore(**row.dropna())
         for _, row in df.iterrows()
     ]
-
-    return entrants, scores
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    return
 
 def parse_txt(txt,offset=0):    
     athletes = []
@@ -166,7 +183,7 @@ def parse_txt(txt,offset=0):
 
     return df
 
-def parse_rogue19_leaderboard(gcp=False):
+def parse_ri2019_leaderboard(gcp=False):
     comp_id = 'ri2019'
     lb = []
     for gender in ['male','female']:
@@ -192,6 +209,8 @@ def parse_rogue19_leaderboard(gcp=False):
         ManualEntrant(**row.dropna())
         for _, row in idx.iterrows()
     ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
 
     scores_df = pd.melt(
         lb.reset_index(),
@@ -240,8 +259,9 @@ def parse_rogue19_leaderboard(gcp=False):
         ManualScore(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
-
-    return entrants, scores
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    return
 
 def fetch_capturefit_leaderboard(
     event: str,
@@ -260,3 +280,200 @@ def fetch_capturefit_leaderboard(
     r.raise_for_status()
     data = r.json()
     return data
+
+def parse_fict2019_leaderboard(gcp=False,refresh=False):
+    comp_id = 'fict2019'
+    lb = []
+    for gender in ['male','female']:
+        file = f'manual/raw/{comp_id}_leaderboard_{gender}.json'
+        if not file_exists(file,gcp=gcp) or refresh:
+            event = "5bdc47726e82987c55448ab7"
+            entry_type = "Individual"
+            category = "RX"
+            data = fetch_capturefit_leaderboard(
+                event=event,
+                entry_type=entry_type,
+                category=category,
+                gender=gender.capitalize()
+            )
+            data_json = json.dumps(data)
+            dump_data(data_json,file,gcp=gcp)
+        else:
+            data_json = load_data(file,gcp=gcp)
+            data = json.loads(data_json)
+        lb.extend(data['leaderboard'])
+
+    lb = pd.DataFrame(lb)
+    lb['gender'] = lb['gender'].str.slice(0,1)
+
+    lb['overall_rank'] = pd.to_numeric(lb['position'],errors='coerce')
+    lb['overall_points'] = pd.to_numeric(lb['total'],errors='coerce')
+    lb['name'] = fix_name_column(lb['name'])
+    lb['name_lower'] = lb['name'].str.lower()\
+        .str.replace('mr.','').str.strip()
+
+    athletes = get_athlete_names()
+    athletes['name_lower'] = athletes['name'].str.lower()
+
+    lb = pd.merge(
+        lb.drop(columns=['name']),
+        athletes,
+        on=['gender','name_lower'],
+        how='left'
+    ).assign(comp_id=comp_id)
+
+    assert not lb['athlete_id'].isna().any()
+
+    entrants = [
+        ManualEntrant(**row.dropna())
+        for _, row in lb.iterrows()
+    ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+
+    scores_df = lb[['gender','athlete_id','scores']]\
+        .explode('scores').reset_index(drop=True)
+
+    scores_df = pd.merge(
+        scores_df.drop(columns=['scores']),
+        scores_df['scores'].apply(pd.Series),
+        left_index=True,
+        right_index=True,
+        how='left'
+    ).assign(comp_id=comp_id)
+
+    scores_df['ordinal'] = pd.to_numeric(scores_df['workoutnumber'],errors='coerce')
+    scores_df['score'] = scores_df['time']
+    scores_df['rank'] = pd.to_numeric(scores_df['position'],errors='coerce')
+    scores_df['tiebreak'] = scores_df['tiebreaker'].apply(
+        lambda x: str(int(x)) if not pd.isna(x) else x
+    )
+
+    scores = [
+        ManualScore(**row.dropna())
+        for _, row in scores_df.iterrows()
+    ]
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    return
+
+def fetch_sanctional_leaderboard(
+    year: int,
+    sanctional: int,
+    division: int
+):
+    base_url = "https://c3po.crossfit.com/api/leaderboards/v2/competitions"
+    url = f"{base_url}/sanctionals/{year}/leaderboards"
+
+    params = {
+        'sanctional': sanctional,
+        'division': division
+    }
+
+    r = requests.get(url, params=params)
+    r.raise_for_status()
+    data = r.json()
+    return data
+
+def parse_icc2019_leaderboard(gcp=False,refresh=False):
+    comp_id = 'icc2019'
+    lb = []
+    for d, gender in enumerate(['male','female']):
+        file_path = f"manual/raw/icc2019_{gender}.json"
+        if not file_exists(file_path,gcp) or refresh:
+            data = fetch_sanctional_leaderboard(2019, 43, d+1)
+            data_json = json.dumps(data)
+            dump_data(data_json,file_path,gcp)
+        else:
+            data_json = load_data(file_path,gcp)
+            data = json.loads(data_json)
+        lb.extend(data['leaderboardRows'])
+    lb = pd.DataFrame(lb)
+
+    entrant_df = pd.merge(
+        lb[['overallRank','overallScore','scores']],
+        lb['entrant'].apply(pd.Series),
+        left_index=True, right_index=True
+    ).rename(columns={
+        'competitorName':'name',
+        'overallRank':'overall_rank',
+        'overallScore':'overall_score'
+    })
+    entrant_df['name'] = fix_name_column(entrant_df['name'])
+    entrant_df['name_lower'] = entrant_df['name'].str.lower()\
+        .replace(
+            {
+                'ballo oliver': 'oliver ballo',
+                'yundov nikita': 'nikita yundov',
+                'christoph korner': 'christoph koerner',
+                'jonaa muller': 'jonas muller'
+            }
+        )
+
+    athletes = get_athlete_names()
+    athletes['name_lower'] = athletes['name'].str.lower()
+
+    entrant_df = pd.merge(
+        entrant_df.drop(columns=['name']),
+        athletes,
+        on=['gender','name_lower'],
+        how='left'
+    ).assign(comp_id=comp_id)
+
+    assert entrant_df['athlete_id'].isna().sum() == 0
+    assert entrant_df.groupby('name_lower')['athlete_id'].nunique().max() == 1
+
+    entrants = [
+        ManualEntrant(**row.dropna())
+        for _, row in entrant_df.iterrows()
+    ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+
+    scores_df = entrant_df[['athlete_id','gender','scores']]\
+        .explode('scores').reset_index(drop=True)
+    scores_df = pd.merge(
+        scores_df.drop(columns=['scores']),
+        scores_df['scores'].apply(pd.Series),
+        left_index=True,
+        right_index=True,
+        how='left'
+    ).assign(comp_id=comp_id)\
+        .rename(columns={'scoreDisplay':'score'})
+
+    scores = [
+        ManualScore(**row.dropna())
+        for _, row in scores_df.iterrows()
+    ]
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    return
+
+def parse_all(gcp=False):
+    try:
+        parse_scc2019_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing SCC 2019: {e}')
+    try:
+        parse_lcq2025_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing LCQ 2025: {e}')
+    try:
+        parse_ri2019_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing RI 2019: {e}')
+    try:
+        parse_fict2019_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing Fict 2019: {e}')
+    try:
+        parse_icc2019_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing ICC 2019: {e}')
+
+if __name__ == '__main__':
+    import os
+    os.makedirs('manual/raw',exist_ok=True)
+    os.makedirs('manual/parsed/entrants',exist_ok=True)
+    os.makedirs('manual/parsed/scores',exist_ok=True)
+    parse_all(gcp=False)
