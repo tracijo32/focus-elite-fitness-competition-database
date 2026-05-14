@@ -331,9 +331,6 @@ class ManualScore(BaseModel):
     rank: int | None = None
     points: int | None = None
 
-from pydantic import BaseModel, Field
-from datetime import datetime
-
 class ScoreItCompetition(BaseModel):
     comp_id: int = Field(alias='eventId')
     event_ref: str = Field(alias='ref')
