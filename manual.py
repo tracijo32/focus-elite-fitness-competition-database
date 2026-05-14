@@ -449,6 +449,105 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
     dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
     return
 
+def fetch_rcc2019_leaderboard(
+    gender: str,
+    n: int = 0
+):
+    assert n <= 10, "n must be less than or equal to 10"
+
+    from api import WodcastAPIRequestClient
+    client = WodcastAPIRequestClient()
+
+    event_id = 2813
+    gender = 'MENS' if gender[0].upper() == 'M' else 'WOMENS'
+    if n == 0:
+        data = client.get_overall_results_page(
+            event_id=event_id,
+            gender=gender,
+        )
+    else:
+        data = client.get_workout_results_page(
+            event_id=event_id,
+            gender=gender,
+            event_number=n,
+        )
+    return data
+
+def parse_rcc2019_leaderboard(gcp=False,refresh=False):
+    comp_id = 'rcc2019'
+    entrants_df = []
+    scores_df = []
+    for gender in ['M','F']:
+        for n in range(11):
+            file_path = f'manual/raw/rcc2019_{gender}_{n}.json'
+            if not file_exists(file_path) or refresh:
+                data = fetch_rcc2019_leaderboard(gender, n)
+                data_json = json.dumps(data)
+                dump_data(data_json, file_path, gcp=gcp)
+            else:
+                data_json = load_data(file_path, gcp=gcp)
+                data = json.loads(data_json)
+            if n == 0:
+                entrants_df.extend(data['athletes'])
+            else:
+                scores_df.extend([
+                    {'ordinal': n, **row}
+                    for row in data['athletes']
+                ])
+    entrants_df = pd.DataFrame(entrants_df)\
+        .drop_duplicates().assign(comp_id=comp_id)
+    entrants_df['gender'] = entrants_df['gender'].str.upper()
+    entrants_df['name_lower'] = entrants_df[['first_name','last_name']]\
+        .apply(' '.join, axis=1).str.lower().str.strip()
+    entrants_df['name_lower'] = fix_name_column(entrants_df['name_lower'])\
+        .replace({'paul trembley':'paul tremblay','lee tanner':'tanner lee'})
+    scores_df = pd.DataFrame(scores_df).drop_duplicates()
+
+    athletes = get_athlete_names(gcp=gcp)
+    athletes['name_lower'] = athletes['name'].str.lower()
+
+    entrants_df = pd.merge(
+        entrants_df,
+        athletes,
+        on=['gender','name_lower'],
+        how='left'
+    ).rename(
+        columns={
+            'rank': 'overall_rank',
+            'result': 'overall_points'
+        }
+    )
+
+    assert not entrants_df['athlete_id'].isnull().any()
+    assert entrants_df.groupby('name')['athlete_id'].nunique().eq(1).all()
+
+    entrants = [
+        ManualEntrant(**row.dropna())
+        for _, row in entrants_df.iterrows()
+    ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+
+    scores_df = pd.merge(
+        scores_df,
+        entrants_df[['athlete_id','id']],
+        on='id',
+        how='left'
+    ).assign(comp_id=comp_id)
+    scores_df['gender'] = scores_df['gender'].str.upper()
+    scores_df['score'] = scores_df['result']
+
+    assert not scores_df['athlete_id'].isnull().any()
+
+    scores = [
+        ManualScore(**row.dropna())
+        for _, row in scores_df.iterrows()
+    ]
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    
+    return
+
 def parse_all(gcp=False):
     try:
         parse_scc2019_leaderboard(gcp=gcp)
@@ -470,6 +569,10 @@ def parse_all(gcp=False):
         parse_icc2019_leaderboard(gcp=gcp)
     except Exception as e:
         print(f'Error parsing ICC 2019: {e}')
+    try:
+        parse_rcc2019_leaderboard(gcp=gcp)
+    except Exception as e:
+        print(f'Error parsing RCC 2019: {e}')
 
 if __name__ == '__main__':
     import os
