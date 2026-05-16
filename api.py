@@ -83,6 +83,21 @@ class APIRequestClient:
             response.raise_for_status()
             return payload
 
+    def fetch_metadata(self, comp_id):
+        return
+
+    def fetch_divisions(self, comp_id):
+        return
+
+    def fetch_leaderboard_page(self, comp_id, div_id, page: int = 1):
+        return
+
+    def fetch_workouts(self, comp_id, div_id):
+        return
+
+    def fetch_profile(self, profile_id):
+        return
+
 class CrossFitAPIRequestClient(APIRequestClient):
     def __init__(self):
         super().__init__(base_url="https://c3po.crossfit.com/api")
@@ -108,18 +123,11 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
     def __init__(self, *args, **kwargs):
         super().__init__(base_url="https://competitioncorner.net/api2/v1", *args, **kwargs)
 
-    def get_events(
-        self,
-        per_page: int = 100, 
-        timestamp: int | None = None
-    ):
+    def fetch_competitions(self):
         params = {
             'page': 1,
-            'perPage': per_page,
+            'perPage': 100,
         }
-        if timestamp:
-            params['timestamp'] = timestamp
-
         events_all = []
         while True:
             events = self._request_json("/events/filtered", params=params)
@@ -140,7 +148,7 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
         self, 
         event_id: int, 
         division_key: str,
-        per_page: int = 50
+        per_page: int = 500
     ):
         params = {
             'start': 0,
@@ -158,64 +166,69 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
             params['end'] += per_page
         return all_rows
 
-    def get_event_workouts(
-        self, 
-        event_id: int, 
-        division_key: str
-    ):
-        params = {
-            'hasAthletes': False
-        }
-        payload = self._request_json(f"/leaderboard/{event_id}/tab/{division_key}", params=params)
-        return payload.get('workouts', [])
+    def fetch_metadata(self, comp_id):
+        return self._request_json(f"/events/{comp_id}")
 
-    def get_participant(
-        self,
-        division_key: str,
-        roster_id: int
-    ):
+    def fetch_divisions(self, comp_id):
+        return self._request_json(f"/leaderboard/{comp_id}")
+
+    def fetch_leaderboard_page(self, comp_id, div_id, page: int = 1):
+        n = 500
+        params = {
+            'start': 0,
+            'end': n,
+            'athletesOnly': False
+        }
+        data = self._request_json(
+            f"/leaderboard/{comp_id}/tab/{div_id}",
+            params=params
+        )
+        a = data['athletes']
+        while len(a) == n:
+            params['athletesOnly'] = True
+            params['start'] += n
+            params['end'] += n
+            a = self._request_json(
+                f"/leaderboard/{comp_id}/tab/{div_id}",
+                params=params
+            )['athletes']
+            data['athletes'].extend(a)
+        return data
+
+    def fetch_athlete(self, profile_id):
+        return self._request_json(f"/athletes/{profile_id}")
+
+    def fetch_participant(self, comp_id ,div_id ,roster_id):
         params = {
             'preview': False,
             'rosterId': roster_id
         }
-        return self._request_json(f"/leaderboard/{division_key}/participantdata", params=params)
-
-    def get_workout(self, event_id: int, workout_id: int):
-        params = {
-            'preview': False
-        }
-        return self._request_json(f"/events/{event_id}/workouts/{workout_id}/public", params=params)
-
-    def get_athlete_page(self, profile_key: str):
-        return self._request_json(f"/accounts/athletepage/{profile_key}")
+        return self._request_json(f"/leaderboard/{div_id}/participantdata", params=params)
 
 class StrongestAPIRequestClient(APIRequestClient):
     def __init__(self):
         base_url = "https://compete-strongest-com.global.ssl.fastly.net/api/p"
         super().__init__(base_url)
 
-    def _request_json_data_only(self, url: str, *args, **kwargs):
-        return self._request_json(url, *args, **kwargs)['data']
+    def fetch_metadata(self, comp_id):
+        return self._request_json(f"/competitions/{comp_id}/")
 
-    def get_competition(self, competition_key: str):
-        return self._request_json_data_only(f"/competitions/{competition_key}/")
+    def fetch_divisions(self, comp_id):
+        return self._request_json(f"/competitions/{comp_id}/divisions/")
 
-    def get_divisions(self, competition_key: str):
-        return self._request_json_data_only(f"/competitions/{competition_key}/divisions/")
+    def fetch_workouts(self, comp_id):
+            return self._request_json(f"/competitions/{comp_id}/workouts/")
 
-    def get_workouts(self, competition_key: str):
-            return self._request_json_data_only(f"/competitions/{competition_key}/workouts/")
-
-    def get_leaderboard_page(self, division_key: str, page: int = 1):
-        return self._request_json_data_only(
-            f"/divisions/{division_key}/leaderboard/",
+    def fetch_leaderboard_page(self, comp_id, div_id, page: int = 1):
+        return self._request_json(
+            f"/divisions/{div_id}/leaderboard/",
             params={'p': page}) 
 
-    def get_athlete_profile(self, profile_key: str):
-        return self._request_json_data_only(f"/athletes/{profile_key}/")
+    def fetch_profile(self, profile_id: str):
+        return self._request_json(f"/athletes/{profile_id}")
 
-    def get_scoring_policies(self, competition_key: str):
-        return self._request_json_data_only(f"/competitions/{competition_key}/scoring-policies/")
+    def fetch_scoring_policies(self, comp_id: str):
+        return self._request_json(f"/competitions/{comp_id}/scoring-policies/")
 
 class ScoreItAPIRequestClient(APIRequestClient):
     def __init__(self, *args, **kwargs):
