@@ -131,6 +131,38 @@ class SourceInventoryManager:
         print("Metadata inventory complete")
         return
 
+    def inventory_divisions(self):
+        comp_ids = [
+            c['source_comp_id']
+            for c in self.index
+        ]
+        expected_files = {
+            f'{self.prefix}/{c}/divisions.json'
+            for c in comp_ids
+        }
+        existing_files = {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob=f'{self.prefix}/*/divisions.json')
+        }
+        missing_files = expected_files - existing_files
+        if len(missing_files) == 0:
+            print("Divisions inventory complete")
+            return
+
+        print(f"Downloading {len(missing_files)} missing files")
+        failed = []
+        for file in tqdm(missing_files):
+            comp_id = file.split('/')[-2]
+            try:
+                self.load_divisions(comp_id)
+            except Exception as e:
+                failed.append(comp_id)
+        if len(failed) > 0:
+            print(f"Failed to download {len(failed)} files")
+            print(failed)
+        print("Divisions inventory complete")
+        return
+
     @staticmethod
     def get_leaderboard_page_count(comp_id, div_id):
         return 1
@@ -161,7 +193,8 @@ class SourceInventoryManager:
         failed = []
         for file in tqdm(missing_files):
             comp_id = file.split('/')[-3]
-            div_id = file.split('/')[-1].split('_')[0]
+            bn = file.split('/')[-1].split('_')
+            div_id = '_'.join(bn[:-1])
             try:
                 self.load_leaderboard_page(comp_id, div_id, 1)
             except Exception as e:
@@ -200,8 +233,9 @@ class SourceInventoryManager:
         failed = []
         for file in tqdm(missing_files):
             comp_id = file.split('/')[-3]
-            div_id = file.split('/')[-1].split('_')[0]
-            page = file.split('/')[-1].split('_')[1].split('.')[0]
+            bn = file.split('/')[-1].split('_')
+            div_id = '_'.join(bn[:-1])
+            page = int(bn[-1].split('.')[0])
             try:
                 self.load_leaderboard_page(comp_id, div_id, page)
             except Exception as e:
@@ -232,4 +266,11 @@ class StrongestInventoryManager(SourceInventoryManager):
             results = self.int_after('results', snip)
             page_size = self.int_after('page_size', snip)
         return math.ceil(results / page_size)
-            
+
+class CompetitionCornerInventoryManager(SourceInventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client=api.CompetitionCornerAPIRequestClient(),
+            source='competition-corner',
+            api_data_path=api_data_path
+        )
