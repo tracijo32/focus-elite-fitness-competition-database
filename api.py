@@ -102,21 +102,47 @@ class CrossFitAPIRequestClient(APIRequestClient):
     def __init__(self):
         super().__init__(base_url="https://c3po.crossfit.com/api")
 
-    def get_events(self):
+    def fetch_competitions(self):
         return self._request_json("/competitions/v1/competitions")
 
-    def get_leaderboard_page(
+    def fetch_leaderboard_page(
         self, 
-        url_path: str,
-        division: int,
-        params: dict = {},
-        page: int | None = None
+        comp_id,
+        comp_type,
+        year,
+        division,
+        page: int = 1
     ):
-        if not url_path.startswith('/'):
-            url_path = '/' + url_path
-        params['division'] = division
-        if page is not None:
+        params = {
+            'division': division
+        }
+        if 'regional' in comp_type:
+            cpath = 'regionals'
+            params['regional'] = comp_id
+        elif 'sanctional' in comp_type:
+            cpath = 'sanctionals'
+            params['sanctional'] = comp_id
+        elif 'semifinal' in comp_type:
+            cpath = 'semifinals'
+            params['semifinal'] = comp_id
+        elif 'open' in comp_type:
+            cpath = 'open'
+            params['scaled'] = 0
+        else:
+            cpath = comp_type
+
+        if page > 1:
             params['page'] = page
+            
+        url_path = '/'.join([
+            '',
+            'leaderboards',
+            'v2',
+            'competitions',
+            cpath,
+            str(year),
+            'leaderboards'
+        ])
         return self._request_json(url_path, params=params)
 
 class CompetitionCornerAPIRequestClient(APIRequestClient):
