@@ -110,12 +110,12 @@ class CrossFitAPIRequestClient(APIRequestClient):
         comp_id: int,
         comp_type: str,
         year: int,
-        division: int,
+        div_id: int,
         page: int = 1,
         **kwargs
     ):
         params = {
-            'division': division
+            'division': div_id
         }
         if 'regional' in comp_type:
             cpath = 'regionals'
