@@ -3,40 +3,82 @@ from parameters import GoogleCloudParameters
 import api
 import json, re, math
 from tqdm import tqdm
+from typing import Callable
 
 gcp_params = GoogleCloudParameters()
 storage_client = storage.Client(project=gcp_params.project_id)
 BUCKET = storage_client.bucket(gcp_params.bucket_name)
 
-class SourceInventoryManager:
+class InventoryManager:
     def __init__(
         self, 
-        api_client: api.APIRequestClient,
-        source: str,
-        api_data_path: str = 'api'
+        api_client: api.APIRequestClient | None = None,
+        source: str | None = None,
+        api_data_path: str = 'api',
+        max_consecutive_failures: int | None = None
 ):
         self.bucket = BUCKET
         self._index = None
         self.source = source
         self.prefix = f'{source}/{api_data_path}'
         self.api_client = api_client
+        self.max_consecutive_failures = max_consecutive_failures
 
-    def file_exists(self, blob_name):
-        blob = self.bucket.blob(blob_name)
-        return blob.exists()
+    @property
+    def index(self):
+        if self._index is None:
+            f = f'{self.source}/index.json'
+            self._index = self.download_as_json(f)
+            if self.max_consecutive_failures is None:
+                n = len(self._index)
+                self.max_consecutive_failures = n // 4
+        return self._index
 
     @staticmethod
     def int_after(key: str, text: str) -> int | None:
         m = re.search(rf'"{re.escape(key)}"\s*:\s*(\d+)', text)
         return int(m.group(1)) if m else None
 
-    def upload_as_string(self, data, blob_name):
-        blob = self.bucket.blob(blob_name)
-        blob.upload_from_string(data)
+    def _build_md_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/metadata.json'
 
-    def download_as_string(self, blob_name):
+    def _parse_md_blob(self, blob_name):
+        return {'comp_id': blob_name.split('/')[-2]}
+
+    def _build_divs_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/divisions.json'
+
+    def _parse_divs_blob(self, blob_name):
+        return {'comp_id': blob_name.split('/')[-2]}
+    
+    def _build_lb_pg_blob(self, **kwargs):
+        comp_id = kwargs['comp_id']
+        div_id = kwargs['div_id']
+        page = kwargs['page']
+
+        return '/'.join([
+            self.prefix, 
+            str(comp_id), 
+            'leaderboard', 
+            f'{div_id}_{page}.json'
+        ])
+
+    def _parse_lb_pg_blob(self, blob_name):
+        comp_id = blob_name.split('/')[-3]
+        base = blob_name.split('/')[-1].split('_')
+        div_id = '_'.join(base[:-1])
+        page = int(base[-1].split('.')[0])
+
+        return {
+            'comp_id': comp_id,
+            'div_id': div_id,
+            'page': page
+        }
+
+
+    def _blob_exists(self, blob_name):
         blob = self.bucket.blob(blob_name)
-        return blob.download_as_string().decode('utf-8')
+        return blob.exists()
 
     def upload_as_json(self, data, blob_name):
         blob = self.bucket.blob(blob_name)
@@ -62,203 +104,202 @@ class SourceInventoryManager:
 
         return blob.download_as_bytes(start=start, end=end).decode('utf-8')
 
-    @property
-    def index(self):
-        if self._index is None:
-            f = f'{self.source}/index.json'
-            self._index = self.download_as_json(f)
-        return self._index
-
-    def load_metadata(self, comp_id, refresh: bool = False):
-        path = f'{self.prefix}/{comp_id}/metadata.json'
-        if not self.file_exists(path) or refresh:
-            data = self.api_client.fetch_metadata(comp_id)
-            self.upload_as_json(data, path)
-        else:
-            data = self.download_as_json(path)
-        return data
-
-    def load_divisions(self, comp_id, refresh: bool = False):
-        path = f'{self.prefix}/{comp_id}/divisions.json'
-        if not self.file_exists(path) or refresh:
-            data = self.api_client.fetch_divisions(comp_id)
-            self.upload_as_json(data, path)
-        else:
-            data = self.download_as_json(path)
-        return data
-        
-    def load_leaderboard_page(self, comp_id, div_id, page: int = 1, refresh: bool = False):
-        path = f'{self.prefix}/{comp_id}/leaderboard/{div_id}_{page}.json'
-        if not self.file_exists(path) or refresh:
-            data = self.api_client.fetch_leaderboard_page(comp_id, div_id, page)
-            self.upload_as_json(data, path)
-        else:
-            data = self.download_as_json(path)
-        return data
-
-    def inventory_metadata(self):
-        comp_ids = [
-            c['source_comp_id']
-            for c in self.index
-        ]
-
-        expected_files = {
-            f'{self.prefix}/{c}/metadata.json'
-            for c in comp_ids
-        }
-
-        existing_files = {
-            blob.name for blob in 
-            self.bucket.list_blobs(match_glob=f'{self.prefix}/*/metadata.json')
-        }
-
-        missing_files = expected_files - existing_files
-        if len(missing_files) == 0:
-            print("Metadata inventory complete")
-            return
-
-        print(f"Downloading {len(missing_files)} missing files")
-        failed = []
-        for file in tqdm(missing_files):
-            comp_id = file.split('/')[-2]
-            try:
-                self.load_metadata(comp_id)
-            except Exception as e:
-                failed.append(comp_id)
-        if len(failed) > 0:
-            print(f"Failed to download {len(failed)} files")
-            print(failed)
-        print("Metadata inventory complete")
-        return
-
-    def inventory_divisions(self):
-        comp_ids = [
-            c['source_comp_id']
-            for c in self.index
-        ]
-        expected_files = {
-            f'{self.prefix}/{c}/divisions.json'
-            for c in comp_ids
-        }
-        existing_files = {
-            blob.name for blob in 
-            self.bucket.list_blobs(match_glob=f'{self.prefix}/*/divisions.json')
-        }
-        missing_files = expected_files - existing_files
-        if len(missing_files) == 0:
-            print("Divisions inventory complete")
-            return
-
-        print(f"Downloading {len(missing_files)} missing files")
-        failed = []
-        for file in tqdm(missing_files):
-            comp_id = file.split('/')[-2]
-            try:
-                self.load_divisions(comp_id)
-            except Exception as e:
-                failed.append(comp_id)
-        if len(failed) > 0:
-            print(f"Failed to download {len(failed)} files")
-            print(failed)
-        print("Divisions inventory complete")
-        return
-
-    @staticmethod
-    def get_leaderboard_page_count(comp_id, div_id):
+    def _get_lb_pg_cnt(self, **kwargs):
         return 1
 
-    def inventory_leaderboard_page_one(self):
-        comp_divs = [
-            (c['source_comp_id'], d)
-            for c in self.index
-            for d in [c['division_male'], c['division_female']]
-        ]
+    def _load_or_fetch(
+        self, 
+        build_method: Callable,
+        fetch_method: Callable,
+        refresh: bool = False, 
+        **kwargs
+    ): 
+        path = build_method(**kwargs)
+        if not self._blob_exists(path) or refresh:
+            data = fetch_method(**kwargs)
+            self.upload_as_json(data, path)
+        else:
+            data = self.download_as_json(path)
+        return data
+
+    def _run_inventory(
+        self, 
+        kwargs_list: list[dict],
+        build_method: Callable,
+        parse_method: Callable,
+        load_method: Callable,
+        refresh: bool = False
+    ):
 
         expected_files = {
-            f'{self.prefix}/{c}/leaderboard/{d}_1.json'
-            for c, d in comp_divs
+            build_method(**kwargs)
+            for kwargs in kwargs_list
         }
 
-        existing_files = {
-            blob.name for blob in 
-            self.bucket.list_blobs(match_glob=f'{self.prefix}/*/leaderboard/*_1.json')
-        }
+        if refresh:
+            existing_files = set()
+        else:
+            match_glob_kwargs = {k: '*' for k in kwargs_list[0].keys()}
+            match_glob = build_method(**match_glob_kwargs)
+
+            existing_files = {
+                blob.name for blob in 
+                self.bucket.list_blobs(match_glob=match_glob)
+            }
 
         missing_files = expected_files - existing_files
         if len(missing_files) == 0:
-            print(f"Leaderboard page 1 inventory complete")
             return
 
-        print(f"Downloading {len(missing_files)} missing files")
         failed = []
+        consecutive_failures = 0
         for file in tqdm(missing_files):
-            comp_id = file.split('/')[-3]
-            bn = file.split('/')[-1].split('_')
-            div_id = '_'.join(bn[:-1])
+            kwargs = parse_method(file)
             try:
-                self.load_leaderboard_page(comp_id, div_id, 1)
+                load_method(**kwargs, refresh=refresh)
+                consecutive_failures = 0
             except Exception as e:
-                s = f"comp_id={comp_id},div_id={div_id}"
-                failed.append(s)
-        if len(failed) > 0:
-            print(f"Failed to download {len(failed)} files")
-            print(failed)
-        print("Leaderboard page 1 inventory complete")
-        return
+                failed.append(kwargs)   
+                consecutive_failures += 1
+            if consecutive_failures > self.max_consecutive_failures:
+                print(f"Automatic quit after {consecutive_failures} consecutive failures")
+                print(failed)
+                return
+
+    def load_metadata(
+        self,
+        refresh: bool = False,
+        **kwargs
+    ):
+        return self._load_or_fetch(
+            self._build_md_blob,
+            self.api_client.fetch_metadata,
+            refresh,
+            **kwargs
+        )
+    
+    def load_divisions(
+        self,
+        refresh: bool = False,
+        **kwargs
+    ):
+        return self._load_or_fetch(
+            self._build_divs_blob,
+            self.api_client.fetch_divisions,
+            refresh,
+            **kwargs
+        )
+
+    def load_leaderboard_page(
+        self,
+        refresh: bool = False,
+        **kwargs
+    ):
+        return self._load_or_fetch(
+            self._build_lb_pg_blob,
+            self.api_client.fetch_leaderboard_page,
+            refresh,
+            **kwargs
+        )
         
-    def inventory_leaderboard_pages(self):
-        self.inventory_leaderboard_page_one()
-        comp_divs = [
-            (c['source_comp_id'], d)
+    def run_metadata_inventory(self, refresh: bool = False):
+        kwargs_list = [
+            {'comp_id': c['source_comp_id']}
+            for c in self.index
+        ]
+        self._run_inventory(
+            kwargs_list,
+            self._build_md_blob,
+            self._parse_md_blob,
+            self.load_metadata,
+            refresh
+        )
+
+    def run_divisions_inventory(self, refresh: bool = False):
+        kwargs_list = [
+            {'comp_id': c['source_comp_id']}
+            for c in self.index
+        ]
+        self._run_inventory(
+            kwargs_list,
+            self._build_divs_blob,
+            self._parse_divs_blob,
+            self.load_divisions,
+            refresh
+        )
+
+    def _run_lb_inv_pg_1(
+        self, refresh: bool = False
+    ):
+        kwargs_list = [
+            {
+                'comp_id': c['source_comp_id'],
+                'div_id': d,
+                'page': 1
+            }
             for c in self.index
             for d in [c['division_male'], c['division_female']]
         ]
+        self._run_inventory(
+            kwargs_list,
+            self._build_lb_pg_blob,
+            self._parse_lb_pg_blob,
+            self.load_leaderboard_page,
+            refresh
+        )
 
-        expected_files = {
-            f'{self.prefix}/{c}/leaderboard/{d}_{p}.json'
-            for c, d in comp_divs
-            for p in range(1, self.get_leaderboard_page_count(c, d) + 1)
-        }
-        existing_files = {
-            blob.name for blob in 
-            self.bucket.list_blobs(match_glob=f'{self.prefix}/*/leaderboard/*_*.json')
-        }
-
-        missing_files = expected_files - existing_files
-        if len(missing_files) == 0:
-            print("Multi-page leaderboard inventory complete")
+    def run_leaderboard_inventory(
+        self, refresh: bool = False
+    ):
+        self._run_lb_inv_pg_1(refresh)
+        kwargs_list = [
+            {
+                'comp_id': c['source_comp_id'],
+                'div_id': d,
+            }
+            for c in self.index
+            for d in [c['division_male'], c['division_female']]
+        ]
+        kwargs_list = [
+            {
+                **kwargs,
+                'page': p
+            }
+            for kwargs in kwargs_list
+            for p in range(2, self._get_lb_pg_cnt(**kwargs) + 1)
+        ]
+        if len(kwargs_list) == 0:
             return
 
-        print(f"Downloading {len(missing_files)} missing files")
-        failed = []
-        for file in tqdm(missing_files):
-            comp_id = file.split('/')[-3]
-            bn = file.split('/')[-1].split('_')
-            div_id = '_'.join(bn[:-1])
-            page = int(bn[-1].split('.')[0])
-            try:
-                self.load_leaderboard_page(comp_id, div_id, page)
-            except Exception as e:
-                s = f"comp_id={comp_id},div_id={div_id},page={page}"
-                failed.append(s)
-        if len(failed) > 0:
-            print(f"Failed to download {len(failed)} files")
-            print(failed)
-        print("Multi-page leaderboard inventory complete")
-        return
+        self._run_inventory(
+            kwargs_list,
+            self._build_lb_pg_blob,
+            self._parse_lb_pg_blob,
+            self.load_leaderboard_page,
+            refresh
+        )
 
-class StrongestInventoryManager(SourceInventoryManager):
+class CompetitionCornerInventoryManager(InventoryManager):
     def __init__(self, api_data_path: str = 'api'):
         super().__init__(
-            api_client=api.StrongestAPIRequestClient(),
-            source='strongest',
+            api_client = api.CompetitionCornerAPIRequestClient(),
+            source='competition-corner',
             api_data_path=api_data_path
         )
 
-    def get_leaderboard_page_count(self, comp_id, div_id):
-        f = f'{self.source}/api/{comp_id}/leaderboard/{div_id}_1.json'
-        if not self.file_exists(f):
-            data = self.api_client.fetch_leaderboard_page(comp_id, div_id, 1)
+class StrongestInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.StrongestAPIRequestClient(),
+            source='strongest',
+            api_data_path=api_data_path
+        )
+        
+    def _get_lb_pg_cnt(self, **kwargs):
+        kwargs['page'] = 1
+        f = self._build_lb_pg_blob(**kwargs)
+        if not self._blob_exists(f):
+            data = self.api_client.fetch_leaderboard_page(**kwargs)
             results = data['results']
             page_size = data['page_size']
         else:
@@ -266,11 +307,3 @@ class StrongestInventoryManager(SourceInventoryManager):
             results = self.int_after('results', snip)
             page_size = self.int_after('page_size', snip)
         return math.ceil(results / page_size)
-
-class CompetitionCornerInventoryManager(SourceInventoryManager):
-    def __init__(self, api_data_path: str = 'api'):
-        super().__init__(
-            api_client=api.CompetitionCornerAPIRequestClient(),
-            source='competition-corner',
-            api_data_path=api_data_path
-        )
