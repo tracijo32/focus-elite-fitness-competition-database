@@ -237,20 +237,24 @@ class StrongestAPIRequestClient(APIRequestClient):
 
 class ScoreItAPIRequestClient(APIRequestClient):
     def __init__(self, *args, **kwargs):
-        super().__init__(base_url="https://scoreit.co.za", *args, **kwargs)
+        super().__init__(base_url="https://scoreit.co.za")
 
-    def get_events(self):
+    def fetch_competitions(self):
         passed = self._request_json('/events/passedEvents')
         upcoming = self._request_json('/events/upcomingEvents')
         return passed + upcoming
 
-    def get_event(self, event_ref: str):
-        path = f'/events/upcomingEvent/{event_ref}'
-        return self._request_json(path)
+    def fetch_metadata(self, comp_id: str, **kwargs):
+        return self._request_json(f'/events/upcomingEvent/{comp_id}')
 
-    def get_event_leaderboard(self, event_ref: str, division_ref: str):
-        path = f'/EventTeamScoring/leaderboard/{event_ref}'
-        params = {'divisionRef': division_ref}
+    def fetch_leaderboard_page(
+        self,
+        comp_id: str,
+        div_id: str,
+        **kwargs
+    ):
+        path = f'/EventTeamScoring/leaderboard/{comp_id}'
+        params = {'divisionRef': div_id}
         return self._request_json(path, params=params)
 
 class WodcastAPIRequestClient(APIRequestClient):

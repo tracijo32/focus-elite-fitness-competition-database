@@ -307,3 +307,18 @@ class StrongestInventoryManager(InventoryManager):
             results = self.int_after('results', snip)
             page_size = self.int_after('page_size', snip)
         return math.ceil(results / page_size)
+
+class ScoreItInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.ScoreItAPIRequestClient(),
+            source='score-it',
+            api_data_path=api_data_path
+        )
+
+    def load_divisions(self, **kwargs):
+        data = self.load_metadata(**kwargs)
+        return data['eventDivisions']
+
+    def run_divisions_inventory(self, **kwargs):
+        return
