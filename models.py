@@ -360,3 +360,32 @@ class ScoreItScore(BaseModel):
     points: int | None = Field(alias='pointsEarned',default=None)
     rank: int | None = Field(alias='position',default=None)
     tiebreak: str | None = Field(alias='tiebreak',default=None)
+
+class Entrant(BaseModel):
+    source_comp_id: str
+    gender: str
+    display_name: str
+    source_athlete_id: str
+    overall_rank: int | None = None
+    overall_points: float | None = None
+
+class Score(BaseModel):
+    source_comp_id: str
+    gender: str
+    source_athlete_id: str
+    ordinal: int
+    score_display: str
+    tiebreak_display: str | None = None
+    rank: int | None = None
+    points: float | None = None
+
+class Metadata(BaseModel):
+    source_comp_id: str
+    title: str
+    start_date: datetime
+    end_date: datetime
+    venue_name: str | None = None
+    address: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    virtual: bool
