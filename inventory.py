@@ -122,49 +122,30 @@ class InventoryManager:
             data = self.download_as_json(path)
         return data
 
-    def _run_inventory(
-        self, 
-        kwargs_list: list[dict],
-        build_method: Callable,
-        parse_method: Callable,
+    def _list_blobs_matching(self, match_glob: str):
+        return {
+            blob.name for blob in 
+            self.bucket.list_blobs(match_glob=match_glob)
+        }
+
+    def _load_progress(
+        self, kwargs_list: list[dict],
         load_method: Callable,
         refresh: bool = False
     ):
-
-        expected_files = {
-            build_method(**kwargs)
-            for kwargs in kwargs_list
-        }
-
-        if refresh:
-            existing_files = set()
-        else:
-            match_glob_kwargs = {k: '*' for k in kwargs_list[0].keys()}
-            match_glob = build_method(**match_glob_kwargs)
-
-            existing_files = {
-                blob.name for blob in 
-                self.bucket.list_blobs(match_glob=match_glob)
-            }
-
-        missing_files = expected_files - existing_files
-        if len(missing_files) == 0:
-            return
-
-        failed = []
+        failed_kwargs_list = []
         consecutive_failures = 0
-        for file in tqdm(missing_files):
-            kwargs = parse_method(file)
+        for kwargs in tqdm(kwargs_list):
             try:
                 load_method(**kwargs, refresh=refresh)
                 consecutive_failures = 0
             except Exception as e:
-                failed.append(kwargs)   
                 consecutive_failures += 1
-            if consecutive_failures > self.max_consecutive_failures:
-                print(f"Automatic quit after {consecutive_failures} consecutive failures")
-                print(failed)
-                return
+                failed_kwargs_list.append(kwargs)
+                if consecutive_failures >= self.max_consecutive_failures:
+                    print(f"Max consecutive failures reached: {consecutive_failures}")
+                    return failed_kwargs_list
+        return
 
     def load_metadata(
         self,
@@ -201,18 +182,49 @@ class InventoryManager:
             refresh,
             **kwargs
         )
+
+    def _get_missing_kwargs_list(
+        self, kwargs_list: list[dict],
+        build_method: Callable,
+        refresh: bool = False
+    ):
+        expected_files = {
+            build_method(**kwargs)
+            for kwargs in kwargs_list
+        }
+
+        match_glob = build_method(**{k: '*' for k in kwargs_list[0].keys()})
+        existing_files = self._list_blobs_matching(match_glob)
+
+        if refresh:
+            existing_files = set()
+
+        missing_files = expected_files - existing_files
+        missing_kwargs_list = [
+            kwargs for kwargs in kwargs_list
+            if build_method(**kwargs) in missing_files
+        ]
+        return missing_kwargs_list
         
     def run_metadata_inventory(self, refresh: bool = False):
         kwargs_list = [
             {'comp_id': c['source_comp_id']}
             for c in self.index
         ]
-        self._run_inventory(
+
+        missing_kwargs_list = self._get_missing_kwargs_list(
             kwargs_list,
             self._build_md_blob,
-            self._parse_md_blob,
+            refresh=refresh
+        )
+
+        if len(missing_kwargs_list) == 0:
+            return
+
+        self._load_progress(
+            missing_kwargs_list,
             self.load_metadata,
-            refresh
+            refresh=refresh
         )
 
     def run_divisions_inventory(self, refresh: bool = False):
@@ -220,12 +232,17 @@ class InventoryManager:
             {'comp_id': c['source_comp_id']}
             for c in self.index
         ]
-        self._run_inventory(
+        missing_kwargs_list = self._get_missing_kwargs_list(
             kwargs_list,
             self._build_divs_blob,
-            self._parse_divs_blob,
+            refresh=refresh
+        )
+        if len(missing_kwargs_list) == 0:
+            return
+        self._load_progress(
+            missing_kwargs_list,
             self.load_divisions,
-            refresh
+            refresh=refresh
         )
 
     def _run_lb_inv_pg_1(
@@ -240,12 +257,17 @@ class InventoryManager:
             for c in self.index
             for d in [c['division_male'], c['division_female']]
         ]
-        self._run_inventory(
+        missing_kwargs_list = self._get_missing_kwargs_list(
             kwargs_list,
             self._build_lb_pg_blob,
-            self._parse_lb_pg_blob,
+            refresh=refresh
+        )
+        if len(missing_kwargs_list) == 0:
+            return
+        self._load_progress(
+            missing_kwargs_list,
             self.load_leaderboard_page,
-            refresh
+            refresh=refresh
         )
 
     def run_leaderboard_inventory(
@@ -270,13 +292,18 @@ class InventoryManager:
         ]
         if len(kwargs_list) == 0:
             return
-
-        self._run_inventory(
+        
+        missing_kwargs_list = self._get_missing_kwargs_list(
             kwargs_list,
             self._build_lb_pg_blob,
-            self._parse_lb_pg_blob,
+            refresh=refresh
+        )
+        if len(missing_kwargs_list) == 0:
+            return
+        self._load_progress(
+            missing_kwargs_list,
             self.load_leaderboard_page,
-            refresh
+            refresh=refresh
         )
 
 class CompetitionCornerInventoryManager(InventoryManager):
