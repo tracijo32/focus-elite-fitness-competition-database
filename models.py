@@ -373,7 +373,7 @@ class Score(BaseModel):
     source_comp_id: str
     gender: str
     source_athlete_id: str
-    ordinal: int
+    source_workout_id: str
     score_display: str
     tiebreak_display: str | None = None
     rank: int | None = None
