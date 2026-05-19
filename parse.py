@@ -71,9 +71,8 @@ class StrongestParser(Parser):
             left_index=True,
             right_index=True
         )
-        df['ordinal_map'] = df['header_row'].apply(lambda x: {e:o for o,e in enumerate(x)})
 
-        df = df[['comp_id','gender','div_id','body_rows','ordinal_map']]\
+        df = df[['comp_id','gender','div_id','body_rows']]\
             .explode('body_rows',ignore_index=True)
 
         return df
@@ -124,7 +123,7 @@ class StrongestParser(Parser):
         ## get the registration id of the athlete
         ## to match back to the entrant dataframe
         scores_df = pd.merge(
-            df[['comp_id','gender','div_id','ordinal_map']],
+            df[['comp_id','gender','div_id']],
             df['body_rows'].apply(lambda x: x[0]).apply(pd.Series)['registrationId'],
             left_index=True,
             right_index=True
@@ -142,7 +141,7 @@ class StrongestParser(Parser):
 
         scores_df = pd.merge(
             scores_df[['comp_id','gender','source_athlete_id',
-            'div_id','ordinal_map']],
+            'div_id']],
             scores_df['body_rows'].apply(pd.Series),
             left_index=True,
             right_index=True
@@ -158,11 +157,6 @@ class StrongestParser(Parser):
             indicator=True
         )
         assert scores_df['_merge'].value_counts()['left_only'] == 0
-
-        scores_df['ordinal'] = scores_df.apply(
-            lambda x: x['ordinal_map'].get(x['workout_name']),
-            axis=1
-        )
 
         scores_df = pd.merge(
             scores_df.drop(columns=['_merge']),
@@ -264,7 +258,8 @@ class StrongestParser(Parser):
             'games_points'
         ] = 0
 
-        scores_df = scores_df.rename(columns={'comp_id':'source_comp_id'})
+        scores_df = scores_df.rename(columns=
+        {'comp_id':'source_comp_id','workout_id':'source_workout_id'})
 
         ## compute the total points for each entrant
         e_pts = entrants_df[['source_comp_id','gender','source_athlete_id','overall_points']]
@@ -298,8 +293,9 @@ class StrongestParser(Parser):
             scores_df['points'] = scores_df['games_points']
 
         scores_df = scores_df.reindex(
-            columns = ['source_comp_id','gender','ordinal','source_athlete_id',
-            'points','rank','score_display','tiebreaker_display']
+            columns = ['source_comp_id','gender','source_workout_id',
+            'source_athlete_id','points','rank','score_display',
+            'tiebreak_display']
         )
 
         ## convert the entrants and scores to pydantic models
@@ -348,5 +344,182 @@ class StrongestParser(Parser):
         self.save_model_to_ndjson(
             models=meta,
             model_name='metadata'
+        )
+        return
+
+class ScoreItParser(Parser):
+    def __init__(self):
+        super().__init__(manager=inventory.ScoreItInventoryManager)
+        from parameters import GoogleCloudParams
+        from geopy.geocoders import GoogleV3
+        gcp_params = GoogleCloudParams()
+        self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
+
+    def parse_metadata(self, comp_id):
+        data = self.manager.load_metadata(comp_id=comp_id)
+
+        event_loc = data['eventAddress']
+        s = event_loc.split(' - ')
+        if len(s) == 2:
+            venue_name = s[0].strip()
+            venue_address = s[1].strip()
+        else:
+            s = event_loc.split(', ')
+            venue_name = s[0].strip()
+            venue_address = ', '.join(s[1:])
+
+        start = pd.to_datetime(data['dateActiveFrom']).date()
+        end = pd.to_datetime(data['dateActiveTo']).date()
+
+        geo_loc = self.geolocator.geocode(venue_address)
+        lat = geo_loc.latitude
+        lng = geo_loc.longitude
+        address = geo_loc.address
+    
+        kwargs = {
+            'source_comp_id': comp_id,
+            'title': data['eventName'],
+            'venue_name': venue_name,
+            'address': address,
+            'lat': lat,
+            'lng': lng,
+            'start_date': start,
+            'end_date': end,
+            'virtual': False
+        }
+
+        meta = [Metadata(**kwargs)]
+        self.save_model_to_ndjson(
+            models=meta,
+            model_name='metadata'
+        )
+        return
+
+    def get_leaderboard_frame(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str    
+    ):
+        lb = [
+            self.manager.load_leaderboard(
+                comp_id=comp_id,
+                **d
+            )
+            for d in [
+                {'div_id': division_male, 'gender': 'M'},
+                {'div_id': division_female, 'gender': 'F'}
+            ]
+        ]
+        df = pd.DataFrame([p for page in lb for p in page])
+
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        )
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['teamDetails'],
+            left_index=True,
+            right_index=True
+        ).explode('teamDetails',ignore_index=True)
+
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['teamDetails'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        )
+
+        df = df.rename(
+            columns={
+                'comp_id':'source_comp_id',
+                'teamName':'display_name',
+                'teamRef': 'source_athlete_id',
+                'totalPoints': 'overall_points',
+                'position': 'overall_rank'
+            }
+        )
+        
+        return df
+
+    def parse_leaderboard(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        ## parse entrants
+        entrants_df = df.reindex(
+            columns=['source_comp_id','gender','source_athlete_id',
+            'display_name','overall_points','overall_rank']
+        )
+
+        scores_df = pd.merge(
+            df[['source_comp_id','gender','source_athlete_id']],
+            df['leaderboardColumnValues'],
+            left_index=True,
+            right_index=True
+        ).explode('leaderboardColumnValues',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['leaderboardColumnValues']),
+            scores_df['leaderboardColumnValues'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'courseWorkoutRef':'source_workout_id',
+            'position':'rank',
+            'pointsEarned':'points',
+            'tiebreakerTime':'tiebreak_display'
+        })
+
+        ## scores are in 3 different columns: time, reps, weight
+        ## select the appropriate column based on the scoringMeasurementCode
+        scores_df['score_display_time'] = scores_df['time']\
+            .where(scores_df['scoringMeasurementCode'].eq('TIME'))
+        scores_df['score_display_reps'] = scores_df['repCount']\
+            .apply(lambda x: f'{int(x)} reps' if not pd.isna(x) else None)\
+            .where(scores_df['scoringMeasurementCode'].eq('REPCOUNT'))
+        scores_df['score_display_weight'] = scores_df['weight']\
+            .apply(lambda x: f'{int(x)} kg' if not pd.isna(x) else None)\
+            .where(scores_df['scoringMeasurementCode'].eq('WEIGHT'))
+
+        scores_df['score_display'] = scores_df['score_display_time']\
+            .fillna(scores_df['score_display_reps'])\
+            .fillna(scores_df['score_display_weight'])
+
+        scores_df = scores_df.reindex(columns=[
+            'source_comp_id','gender','source_athlete_id','source_workout_id',
+            'score_display','tiebreak_display','rank','points'
+        ])
+
+        ## output entrants and scores into pydantic models
+        entrants = [
+            Entrant(**row.dropna().to_dict())
+            for _, row in entrants_df.iterrows()
+        ]
+        scores = [
+            Score(**row.dropna().to_dict())
+            for _, row in scores_df.iterrows()
+        ]
+        
+        ## upload models as ndjson files
+        self.save_model_to_ndjson(
+            models=entrants,
+            model_name='entrants'
+        )
+        self.save_model_to_ndjson(
+            models=scores,
+            model_name='scores'
         )
         return
