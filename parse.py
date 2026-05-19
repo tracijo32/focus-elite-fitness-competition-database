@@ -3,10 +3,14 @@ import inventory
 import pandas as pd
 from models import Entrant, Score, Metadata
 from util import convert_value_to_display
+from parameters import GoogleCloudParameters
+from geopy.geocoders import GoogleV3
 
 class Parser:
     def __init__(self, manager: inventory.InventoryManager):
         self.manager = manager()
+        gcp_params = GoogleCloudParameters()
+        self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
 
     def save_model_to_ndjson(
         self, 
@@ -20,6 +24,25 @@ class Parser:
         blob_name = f'{self.manager.source}/parsed/{model_name}.ndjson'
         blob = self.manager.bucket.blob(blob_name)
         blob.upload_from_string(model_json)
+
+    def get_leaderboard_frame(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        lb = [
+            self.manager.load_leaderboard(
+                comp_id=comp_id,
+                **d
+            )
+            for d in [
+                {'div_id': division_male, 'gender': 'M'},
+                {'div_id': division_female, 'gender': 'F'}
+            ]
+        ]
+        df = pd.DataFrame([p for page in lb for p in page])
+        return df
 
 class StrongestParser(Parser):
     def __init__(self):
@@ -52,19 +75,11 @@ class StrongestParser(Parser):
         division_male: str, 
         division_female: str
     ):
-
-        lb = [
-            self.manager.load_leaderboard(
-                comp_id=comp_id,
-                **d
-            )
-            for d in [
-                {'div_id': division_male, 'gender': 'M'},
-                {'div_id': division_female, 'gender': 'F'}
-            ]
-        ]
-
-        df = pd.DataFrame([p for page in lb for p in page])
+        df = super().get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
         df = pd.merge(
             df[['comp_id','div_id','gender']],
             df['data'].apply(pd.Series)['data'].apply(pd.Series),
@@ -350,10 +365,6 @@ class StrongestParser(Parser):
 class ScoreItParser(Parser):
     def __init__(self):
         super().__init__(manager=inventory.ScoreItInventoryManager)
-        from parameters import GoogleCloudParams
-        from geopy.geocoders import GoogleV3
-        gcp_params = GoogleCloudParams()
-        self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
 
     def parse_metadata(self, comp_id):
         data = self.manager.load_metadata(comp_id=comp_id)
@@ -401,18 +412,11 @@ class ScoreItParser(Parser):
         division_male: str,
         division_female: str    
     ):
-        lb = [
-            self.manager.load_leaderboard(
-                comp_id=comp_id,
-                **d
-            )
-            for d in [
-                {'div_id': division_male, 'gender': 'M'},
-                {'div_id': division_female, 'gender': 'F'}
-            ]
-        ]
-        df = pd.DataFrame([p for page in lb for p in page])
-
+        df = super().get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
         df = pd.merge(
             df[['comp_id','div_id','gender']],
             df['data'].apply(pd.Series),
@@ -514,6 +518,200 @@ class ScoreItParser(Parser):
         ]
         
         ## upload models as ndjson files
+        self.save_model_to_ndjson(
+            models=entrants,
+            model_name='entrants'
+        )
+        self.save_model_to_ndjson(
+            models=scores,
+            model_name='scores'
+        )
+        return
+
+class CompetitionCornerParser(Parser):
+    def __init__(self):
+        super().__init__(manager=inventory.CompetitionCornerInventoryManager)
+
+    def parse_metadata(self, comp_id):
+        data = self.manager.load_metadata(comp_id=comp_id)
+
+        virtual = data['locationType'] != 'onsite'
+        location = data.get('location')
+
+        kwargs = {
+            'source_comp_id': str(comp_id),
+            'title':  data.get('name',''),
+            'start_date': pd.to_datetime(data['startDate']).date(),
+            'end_date': pd.to_datetime(data['endDate']).date(),
+            'virtual': virtual,
+        }
+
+        if location and not virtual:
+            kwargs['venue_name'] = location.get('venue','')
+            street = location.get('street','')
+            city = location.get('city','')
+            region = location.get('region','')
+            country = location.get('country','')
+            try:
+                lat = float(location.get('lat'))
+                lng = float(location.get('lng'))
+            except:
+                lat = None
+                lng = None
+
+            addr = f"{street} {city} {region} {country}".strip()
+            if not lat or not lng:
+                location = self.geolocator.geocode(addr)
+                if location:
+                    lat = location.latitude
+                    lng = location.longitude
+                    addr = location.address
+
+            kwargs['lat'] = lat
+            kwargs['lng'] = lng
+            kwargs['address'] = addr
+
+        meta = [Metadata(**kwargs)]
+        self.save_model_to_ndjson(
+            models=meta,
+            model_name='metadata'
+        )
+        return
+
+    def get_leaderboard_frame(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str    
+    ):
+        df = super().get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series)['athletes'],
+            left_index=True,
+            right_index=True
+        ).explode('athletes',ignore_index=True)
+
+        df = pd.merge(
+            df.drop(columns=['athletes']),
+            df['athletes'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(
+            columns = {
+                'comp_id': 'source_comp_id',
+                'name': 'display_name',
+                'place': 'overall_rank',
+                'totalPoints': 'overall_points',
+                'rosterID': 'source_athlete_id'
+            }
+        )
+
+        return df
+
+    def parse_leaderboard(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        ## parse out the entrant data
+        entrants_df = df.reindex(columns=[
+            'source_comp_id','display_name','gender',
+            'overall_rank','overall_points',
+            'source_athlete_id'
+        ]).astype({
+            'source_comp_id':str,
+            'source_athlete_id':str,
+            'gender':str,
+            'display_name':str
+        })
+        entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
+        entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
+
+        ## merge entrant data with the workout scores
+        scores_df = pd.merge(
+            df[['source_comp_id','source_athlete_id','gender']],
+            df['workoutScores'].apply(lambda x: list(x.values())),
+            left_index=True,
+            right_index=True
+        ).explode('workoutScores',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['workoutScores']),
+            scores_df['workoutScores'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'workoutId':'source_workout_id',
+        })
+
+        ## tiebreakers are in parentheses inside <span> tags
+        ## canonical score is before the span tags or is standalone
+        scores_df = pd.merge(
+            scores_df.drop(columns=['res']),
+            scores_df['res'].str.extract(
+                r'^(?P<score_display>.*?)(?:<span>\s*\((?P<tiebreaker>[^)]+)\)\s*</span>)?$'
+            ),
+            left_index=True,
+            right_index=True
+        )
+
+        ## map the units based on what the caption has
+        scores_df['unit'] = scores_df['caption'].replace(
+            {
+                'Weight (kg)':'kg',
+                'Weight (lb)':'lb',
+                'Time': '',
+                'Placement': '',
+                'Meters': 'm',
+                'Reps': 'rep',
+                'Rounds': 'round'
+            }
+        )
+
+        ## if there isn't a number, then it's probably an invalid score
+        ## i.e., WD, DNF, CUT, etc.
+        ## don't append any units to these
+        scores_df.loc[
+            ~scores_df['score_display'].str.contains(r'\d+',regex=True),
+        'unit'] = ''
+
+        scores_df['score_display'] = scores_df['score_display'].astype(str) + ' ' + scores_df['unit']
+        scores_df['score_display'] = scores_df['score_display'].str.strip()
+
+        scores_df = scores_df.reindex(
+            columns=['source_comp_id','source_athlete_id','gender',
+            'source_workout_id','score_display','tiebreaker','rank','points']
+        ).astype({
+            'source_comp_id':str,
+            'source_athlete_id':str,
+            'source_workout_id':str,
+        })
+        scores_df['points'] = pd.to_numeric(scores_df['points'],errors='coerce')
+        scores_df['rank'] = pd.to_numeric(scores_df['rank'],errors='coerce')
+
+        ## convert the entrants and scores to pydantic models
+        entrants = [
+            Entrant(**row.dropna().to_dict()) 
+            for _, row in entrants_df.iterrows()
+        ]
+        scores = [
+            Score(**row.dropna().to_dict())
+            for _, row in scores_df.iterrows()
+        ]
+
+        ## upload the models to the inventory
         self.save_model_to_ndjson(
             models=entrants,
             model_name='entrants'
