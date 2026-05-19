@@ -184,10 +184,3 @@ class ScoreItInventoryManager(InventoryManager):
             source='score-it',
             api_data_path=api_data_path
         )
-
-    def load_divisions(self, **kwargs):
-        data = self.load_metadata(**kwargs)
-        return data['eventDivisions']
-
-    def run_divisions_inventory(self, **kwargs):
-        return
