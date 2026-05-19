@@ -3,7 +3,7 @@ import pandas as pd
 from google.cloud import storage
 from parameters import GoogleCloudParameters
 from unidecode import unidecode
-from models import ManualEntrant, ManualScore, ManualCompetition
+from models import Entrant, Score, Metadata
 
 gcp_params = GoogleCloudParameters()
 storage_client = storage.Client(project=gcp_params.project_id)
@@ -55,6 +55,7 @@ def parse_scc2019_leaderboard(gcp=False):
     comp_id = 'scc2019'
     lb_json = load_data(f'manual/raw/{comp_id}_leaderboard.json',gcp=gcp)
     lb = pd.DataFrame(json.loads(lb_json))
+    lb['display_name'] = lb['name']
     lb['name'] = fix_name_column(lb['name'])
     lb['name_lower'] = lb['name'].str.lower()
 
@@ -65,13 +66,14 @@ def parse_scc2019_leaderboard(gcp=False):
         lb,
         athletes.drop(columns=['name']),
         on=['gender','name_lower'],how='left')\
-        .assign(comp_id='scc2019')
+        .assign(source_comp_id='scc2019')
+    lb['source_athlete_id'] = lb['athlete_id'].astype(str)
 
     assert lb.groupby('name')['athlete_id'].nunique().eq(1).all(), \
         "SCC 2019: Some athletes have multiple ids"
 
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in lb.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
@@ -90,6 +92,7 @@ def parse_lcq2025_leaderboard(
         dfs.append(df)
 
     df = pd.concat(dfs)
+    df['display_name'] = df['name']
     df['name'] = fix_name_column(df['name'])
     df['name_lower'] = df['name'].str.lower()
 
@@ -99,34 +102,36 @@ def parse_lcq2025_leaderboard(
         df,
         athletes.drop(columns=['name']),
         on=['gender','name_lower'],how='left')\
-        .assign(comp_id=comp_id)\
+        .assign(source_comp_id=comp_id)\
             .rename(columns={'total_points': 'overall_points'})
+    df['source_athlete_id'] = df['athlete_id'].astype(str)
 
     assert df.groupby('name')['athlete_id'].nunique().eq(1).all(), \
         "LCQ 2025: Some athletes have multiple ids"
 
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
     dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
 
     df['scores'] = df['scores'].apply(
-        lambda x: [{'ordinal': k, **v} for k,v in x.items()]
+        lambda x: [{'source_workout_id': k, **v} for k,v in x.items()]
     )
 
-    df = df[['athlete_id','scores','comp_id','gender']]\
+    df = df[['source_athlete_id','scores','source_comp_id','gender']]\
         .explode('scores').reset_index(drop=True)
     df = pd.merge(
         df.drop(columns=['scores']),
         df['scores'].apply(pd.Series),
         left_index=True,
         right_index=True
-    )
+    ).rename(columns={'score': 'score_display','tiebreak': 'tiebreak_display'})
+    df['score_display'] = df['score_display'].fillna('--')
 
     scores = [
-        ManualScore(**row.dropna())
+        Score(**row.dropna())
         for _, row in df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
@@ -204,9 +209,10 @@ def parse_ri2019_leaderboard(gcp=False):
     athletes['name_lower'] = athletes['name'].str.lower()
 
     idx = pd.merge(idx,athletes,on=['gender','name_lower'],how='left')\
-        .assign(comp_id=comp_id)
+        .assign(source_comp_id=comp_id).rename(columns={'name': 'display_name'})
+    idx['source_athlete_id'] = idx['athlete_id'].astype(str)
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in idx.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
@@ -216,8 +222,8 @@ def parse_ri2019_leaderboard(gcp=False):
         lb.reset_index(),
         id_vars=['name_lower','gender'],
         value_vars=lb.columns,
-        var_name='ordinal',
-        value_name='score',
+        var_name='source_workout_id',
+        value_name='score_display',
     )
     scores_df = pd.merge(
         scores_df,
@@ -225,17 +231,17 @@ def parse_ri2019_leaderboard(gcp=False):
         on=['name_lower','gender'],
         how='left'
     ).reindex(columns=[
-        'athlete_id','gender','ordinal','score'
+        'source_athlete_id','gender','source_workout_id','score_display'
     ])
 
-    assert scores_df['athlete_id'].notna().all(), \
+    assert scores_df['source_athlete_id'].notna().all(), \
         'Some athletes are not in the athlete master'
 
-    scores_df['capped'] = scores_df['score'].str.contains('CAP',case=False)\
+    scores_df['capped'] = scores_df['score_display'].str.contains('CAP',case=False)\
         .astype(int)
-    scores_df['no_score'] = scores_df['score'].isna()
+    scores_df['no_score'] = scores_df['score_display'].isna()
 
-    v = scores_df['score'].str.split(':',expand=True,n=2)
+    v = scores_df['score_display'].str.split(':',expand=True,n=2)
     v.columns = ['v1','v2']
     v['v1'] = v['v1'].str.extract(r'(\d+)').astype(float)
     v['v2'] = v['v2'].astype(float)
@@ -249,18 +255,21 @@ def parse_ri2019_leaderboard(gcp=False):
 
     scores_df = scores_df\
         .sort_values(
-            by=['gender','ordinal','no_score','capped','v1','v2'],
+            by=['gender','source_workout_id','no_score','capped','v1','v2'],
             ascending=True
-        ).assign(comp_id='ri2019')
+        ).assign(source_comp_id='ri2019')
 
-    scores_df['rank'] = scores_df.groupby(['gender','ordinal']).cumcount() + 1
+    scores_df['rank'] = scores_df.groupby(['gender','source_workout_id']).cumcount() + 1
+    scores_df['source_workout_id'] = scores_df['source_workout_id'].astype(str)
+    scores_df['score_display'] = scores_df['score_display'].fillna('--').astype(str)
 
     scores = [
-        ManualScore(**row.dropna())
+        Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
     dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+
     return
 
 def fetch_capturefit_leaderboard(
@@ -282,6 +291,7 @@ def fetch_capturefit_leaderboard(
     return data
 
 def parse_fict2019_leaderboard(gcp=False,refresh=False):
+    
     comp_id = 'fict2019'
     lb = []
     for gender in ['male','female']:
@@ -308,6 +318,7 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
 
     lb['overall_rank'] = pd.to_numeric(lb['position'],errors='coerce')
     lb['overall_points'] = pd.to_numeric(lb['total'],errors='coerce')
+    lb['display_name'] = lb['name']
     lb['name'] = fix_name_column(lb['name'])
     lb['name_lower'] = lb['name'].str.lower()\
         .str.replace('mr.','').str.strip()
@@ -320,18 +331,19 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
         athletes,
         on=['gender','name_lower'],
         how='left'
-    ).assign(comp_id=comp_id)
+    ).assign(source_comp_id=comp_id)
+    lb['source_athlete_id'] = lb['athlete_id'].astype(str)
 
     assert not lb['athlete_id'].isna().any()
 
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in lb.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
     dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
 
-    scores_df = lb[['gender','athlete_id','scores']]\
+    scores_df = lb[['gender','source_athlete_id','scores']]\
         .explode('scores').reset_index(drop=True)
 
     scores_df = pd.merge(
@@ -340,17 +352,17 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
         left_index=True,
         right_index=True,
         how='left'
-    ).assign(comp_id=comp_id)
+    ).assign(source_comp_id=comp_id)
 
-    scores_df['ordinal'] = pd.to_numeric(scores_df['workoutnumber'],errors='coerce')
-    scores_df['score'] = scores_df['time']
+    scores_df['source_workout_id'] = scores_df['workoutnumber'].astype(int).astype(str)
+    scores_df['score_display'] = scores_df['time'].fillna('--')
     scores_df['rank'] = pd.to_numeric(scores_df['position'],errors='coerce')
-    scores_df['tiebreak'] = scores_df['tiebreaker'].apply(
+    scores_df['tiebreak_display'] = scores_df['tiebreaker'].apply(
         lambda x: str(int(x)) if not pd.isna(x) else x
     )
 
     scores = [
-        ManualScore(**row.dropna())
+        Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
@@ -395,11 +407,11 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
         lb['entrant'].apply(pd.Series),
         left_index=True, right_index=True
     ).rename(columns={
-        'competitorName':'name',
+        'competitorName':'display_name',
         'overallRank':'overall_rank',
         'overallScore':'overall_score'
     })
-    entrant_df['name'] = fix_name_column(entrant_df['name'])
+    entrant_df['name'] = fix_name_column(entrant_df['display_name'])
     entrant_df['name_lower'] = entrant_df['name'].str.lower()\
         .replace(
             {
@@ -418,19 +430,20 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
         athletes,
         on=['gender','name_lower'],
         how='left'
-    ).assign(comp_id=comp_id)
+    ).assign(source_comp_id=comp_id)
+    entrant_df['source_athlete_id'] = entrant_df['athlete_id'].astype(str)
 
     assert entrant_df['athlete_id'].isna().sum() == 0
     assert entrant_df.groupby('name_lower')['athlete_id'].nunique().max() == 1
 
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in entrant_df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
     dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
 
-    scores_df = entrant_df[['athlete_id','gender','scores']]\
+    scores_df = entrant_df[['source_athlete_id','gender','scores']]\
         .explode('scores').reset_index(drop=True)
     scores_df = pd.merge(
         scores_df.drop(columns=['scores']),
@@ -438,11 +451,13 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
         left_index=True,
         right_index=True,
         how='left'
-    ).assign(comp_id=comp_id)\
-        .rename(columns={'scoreDisplay':'score'})
+    ).assign(source_comp_id=comp_id)\
+        .rename(columns={'scoreDisplay':'score_display',
+        'ordinal':'source_workout_id'})
+    scores_df['source_workout_id'] = scores_df['source_workout_id'].astype(str)
 
     scores = [
-        ManualScore(**row.dropna())
+        Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
@@ -491,14 +506,14 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
                 entrants_df.extend(data['athletes'])
             else:
                 scores_df.extend([
-                    {'ordinal': n, **row}
+                    {'source_workout_id': n, **row}
                     for row in data['athletes']
                 ])
     entrants_df = pd.DataFrame(entrants_df)\
-        .drop_duplicates().assign(comp_id=comp_id)
+        .drop_duplicates().assign(source_comp_id=comp_id)
     entrants_df['gender'] = entrants_df['gender'].str.upper()
-    entrants_df['name_lower'] = entrants_df[['first_name','last_name']]\
-        .apply(' '.join, axis=1).str.lower().str.strip()
+    entrants_df['display_name'] = entrants_df[['first_name','last_name']].apply(' '.join, axis=1)
+    entrants_df['name_lower'] = entrants_df['display_name'].str.lower().str.strip()
     entrants_df['name_lower'] = fix_name_column(entrants_df['name_lower'])\
         .replace({'paul trembley':'paul tremblay','lee tanner':'tanner lee'})
     scores_df = pd.DataFrame(scores_df).drop_duplicates()
@@ -520,9 +535,10 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
 
     assert not entrants_df['athlete_id'].isnull().any()
     assert entrants_df.groupby('name')['athlete_id'].nunique().eq(1).all()
+    entrants_df['source_athlete_id'] = entrants_df['athlete_id'].astype(str)
 
     entrants = [
-        ManualEntrant(**row.dropna())
+        Entrant(**row.dropna())
         for _, row in entrants_df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
@@ -530,22 +546,22 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
 
     scores_df = pd.merge(
         scores_df,
-        entrants_df[['athlete_id','id']],
+        entrants_df[['source_athlete_id','id']],
         on='id',
         how='left'
-    ).assign(comp_id=comp_id)
+    ).assign(source_comp_id=comp_id)
     scores_df['gender'] = scores_df['gender'].str.upper()
-    scores_df['score'] = scores_df['result']
+    scores_df['score_display'] = scores_df['result']
+    scores_df['source_workout_id'] = scores_df['source_workout_id'].astype(str)
 
-    assert not scores_df['athlete_id'].isnull().any()
+    assert not scores_df['source_athlete_id'].isnull().any()
 
     scores = [
-        ManualScore(**row.dropna())
+        Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
     dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
-    
     return
 
 def parse_all(gcp=False):
@@ -576,7 +592,4 @@ def parse_all(gcp=False):
 
 if __name__ == '__main__':
     import os
-    os.makedirs('manual/raw',exist_ok=True)
-    os.makedirs('manual/parsed/entrants',exist_ok=True)
-    os.makedirs('manual/parsed/scores',exist_ok=True)
-    parse_all(gcp=False)
+    parse_all(gcp=True)
