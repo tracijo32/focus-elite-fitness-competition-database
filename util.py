@@ -2,7 +2,6 @@
 
 import re
 
-
 def _parse_colon_duration_to_seconds(s: str) -> float | None:
     """Parse ``HH:MM:SS.ss``, ``MM:SS.ss``, or ``:SS.ss`` into total seconds."""
     s = s.strip()
@@ -39,7 +38,6 @@ def _time_cap_value_to_seconds(value: str | int | float | None) -> float | None:
     if isinstance(value, str):
         return _parse_colon_duration_to_seconds(value)
     return None
-
 
 def parse_timed_workout_score(
     score: str | int | float | None,
@@ -95,3 +93,26 @@ def parse_timed_workout_score(
         return cap_base + float(cap_m.group(1))
 
     return None
+
+def convert_seconds_to_time_score(seconds: float) -> str:
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = float(seconds % 60)
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:05.2f}"
+    elif minutes > 0:
+        return f"{minutes:02d}:{secs:05.2f}"
+    else:
+        return f"{secs:05.2f}"
+
+def convert_value_to_display(score_type: str, value: float) -> str:
+    from pandas import isna
+    if isna(value):
+        return None
+    elif value == 0:
+        return '--'
+    elif score_type == 'time':
+        return convert_seconds_to_time_score(value)
+    else:
+        return str(int(value))
