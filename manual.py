@@ -53,7 +53,7 @@ def dump_data(data,file_path,gcp=False):
 
 def parse_scc2019_leaderboard(gcp=False):
     comp_id = 'scc2019'
-    lb_json = load_data(f'manual/raw/{comp_id}_leaderboard.json',gcp=gcp)
+    lb_json = load_data(f'manual/raw/{comp_id}/{comp_id}_leaderboard.json',gcp=gcp)
     lb = pd.DataFrame(json.loads(lb_json))
     lb['display_name'] = lb['name']
     lb['name'] = fix_name_column(lb['name'])
@@ -77,7 +77,7 @@ def parse_scc2019_leaderboard(gcp=False):
         for _, row in lb.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
     return
 
 def parse_lcq2025_leaderboard(
@@ -86,7 +86,7 @@ def parse_lcq2025_leaderboard(
     comp_id = 'lcq2025'
     dfs = []
     for gender in ['male','female']:
-        data_json = load_data(f'manual/raw/{comp_id}_leaderboard_{gender}.json',gcp=gcp)
+        data_json = load_data(f'manual/raw/{comp_id}/leaderboard_{gender}.json',gcp=gcp)
         data = json.loads(data_json)
         df = pd.DataFrame(data).assign(gender=gender[0].upper())
         dfs.append(df)
@@ -114,7 +114,7 @@ def parse_lcq2025_leaderboard(
         for _, row in df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
 
     df['scores'] = df['scores'].apply(
         lambda x: [{'source_workout_id': k, **v} for k,v in x.items()]
@@ -135,7 +135,7 @@ def parse_lcq2025_leaderboard(
         for _, row in df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
 def parse_txt(txt,offset=0):    
@@ -216,7 +216,7 @@ def parse_ri2019_leaderboard(gcp=False):
         for _, row in idx.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
 
     scores_df = pd.melt(
         lb.reset_index(),
@@ -268,7 +268,7 @@ def parse_ri2019_leaderboard(gcp=False):
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
 
     return
 
@@ -341,7 +341,7 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
         for _, row in lb.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
 
     scores_df = lb[['gender','source_athlete_id','scores']]\
         .explode('scores').reset_index(drop=True)
@@ -366,7 +366,7 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
 def fetch_sanctional_leaderboard(
@@ -387,11 +387,11 @@ def fetch_sanctional_leaderboard(
     data = r.json()
     return data
 
-def parse_icc2019_leaderboard(gcp=False,refresh=False):
-    comp_id = 'icc2019'
+def parse_isd2019_leaderboard(gcp=False,refresh=False):
+    comp_id = 'isd2019'
     lb = []
     for d, gender in enumerate(['male','female']):
-        file_path = f"manual/raw/icc2019_{gender}.json"
+        file_path = f"manual/raw/{comp_id}/{comp_id}_{gender}.json"
         if not file_exists(file_path,gcp) or refresh:
             data = fetch_sanctional_leaderboard(2019, 43, d+1)
             data_json = json.dumps(data)
@@ -441,7 +441,7 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
         for _, row in entrant_df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
 
     scores_df = entrant_df[['source_athlete_id','gender','scores']]\
         .explode('scores').reset_index(drop=True)
@@ -461,7 +461,7 @@ def parse_icc2019_leaderboard(gcp=False,refresh=False):
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
 def fetch_rcc2019_leaderboard(
@@ -494,7 +494,7 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
     scores_df = []
     for gender in ['M','F']:
         for n in range(11):
-            file_path = f'manual/raw/rcc2019_{gender}_{n}.json'
+            file_path = f'manual/raw/{comp_id}]/{comp_id}_{gender}_{n}.json'
             if not file_exists(file_path) or refresh:
                 data = fetch_rcc2019_leaderboard(gender, n)
                 data_json = json.dumps(data)
@@ -542,7 +542,7 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
         for _, row in entrants_df.iterrows()
     ]
     entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/entrants/{comp_id}.json",gcp)
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
 
     scores_df = pd.merge(
         scores_df,
@@ -561,7 +561,7 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
         for _, row in scores_df.iterrows()
     ]
     scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/scores/{comp_id}.json",gcp)
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
 def parse_all(gcp=False):
@@ -582,9 +582,9 @@ def parse_all(gcp=False):
     except Exception as e:
         print(f'Error parsing Fict 2019: {e}')
     try:
-        parse_icc2019_leaderboard(gcp=gcp)
+        parse_isd2019_leaderboard(gcp=gcp)
     except Exception as e:
-        print(f'Error parsing ICC 2019: {e}')
+        print(f'Error parsing Italian Showdown 2019: {e}')
     try:
         parse_rcc2019_leaderboard(gcp=gcp)
     except Exception as e:
