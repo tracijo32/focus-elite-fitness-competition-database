@@ -12,24 +12,29 @@ class Parser:
         gcp_params = GoogleCloudParameters()
         self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
 
+    def build_parsed_blob_name(self, model_name: str, **kwargs):
+        c = kwargs['comp_id']
+        blob_name = f'{self.manager.source}/parsed/{c}/{model_name}.ndjson'
+        return blob_name
+
     def save_model_to_ndjson(
         self, 
         models: list[BaseModel],
-        model_name: str,
+        blob_name: str
     ):
         model_type = type(models[0])
         assert all(isinstance(m, model_type) for m in models)
 
-        model_json = "\n".join([m.model_dump_json() for m in models])
-        blob_name = f'{self.manager.source}/parsed/{model_name}.ndjson'
         blob = self.manager.bucket.blob(blob_name)
-        blob.upload_from_string(model_json)
+        models_json = "\n".join([m.model_dump_json() for m in models])
+        blob.upload_from_string(models_json)
 
     def get_leaderboard_frame(
         self,
         comp_id: str,
         division_male: str,
-        division_female: str
+        division_female: str,
+        **kwargs
     ):
         lb = [
             self.manager.load_leaderboard(
@@ -92,7 +97,7 @@ class StrongestParser(Parser):
 
         return df
 
-    def parse_leaderboard(
+    def get_entrants_and_scores_frame(
         self,
         comp_id: str,
         division_male: str,
@@ -313,6 +318,14 @@ class StrongestParser(Parser):
             'tiebreak_display']
         )
 
+        return entrants_df, scores_df
+
+    def parse_leaderboard(
+        self, **kwargs
+    ):
+
+        entrants_df, scores_df = self.get_entrants_and_scores_frame(**kwargs)
+
         ## convert the entrants and scores to pydantic models
         entrants = [
             Entrant(**row.dropna().to_dict()) 
@@ -324,15 +337,18 @@ class StrongestParser(Parser):
         ]
 
         ## upload the models to the inventory
+        blob_name_entrants = self.build_parsed_blob_name(
+            model_name='entrants',**kwargs)
         self.save_model_to_ndjson(
             models=entrants,
-            model_name='entrants'
+            blob_name=blob_name_entrants
         )
+        blob_name_scores = self.build_parsed_blob_name(
+            model_name='scores',**kwargs)
         self.save_model_to_ndjson(
             models=scores,
-            model_name='scores'
+            blob_name=blob_name_scores
         )
-
         return
 
     def parse_metadata(self,comp_id: str):
@@ -356,9 +372,11 @@ class StrongestParser(Parser):
             kwargs['lng'] = data['place']['lng']
 
         meta = [Metadata(**kwargs)]
+        blob_name = self.build_parsed_blob_name(
+            model_name='metadata',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=meta,
-            model_name='metadata'
+            blob_name=blob_name
         )
         return
 
@@ -719,5 +737,155 @@ class CompetitionCornerParser(Parser):
         self.save_model_to_ndjson(
             models=scores,
             model_name='scores'
+        )
+        return
+
+class CrossFitParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=inventory.CrossFitInventoryManager
+        )
+
+    def build_parsed_blob_name(self, model_name: str, **kwargs):
+        c = kwargs['comp_id']
+        d = kwargs['div_id']
+        p = kwargs['page']
+        blob_name = f'{self.manager.source}/parsed/{model_name}_{c}_{d}_{p}.ndjson'
+        return blob_name
+
+    def get_total_pages(
+        self,
+        **kwargs
+    ):
+        data = self.manager.load_leaderboard_page(**kwargs)
+        return data['pagination']['totalPages']
+
+    def get_leaderboard_page_frame(
+        self, 
+        refetch: bool = False,
+        **kwargs
+    ):
+        data = self.manager.load_leaderboard_page(**kwargs, refresh=refetch)
+        comp = data['competition']
+        df = pd.DataFrame(data['leaderboardRows'])\
+            .rename(columns={
+                'overallRank':'overall_rank',
+                'overallScore':'overall_points'
+            })
+        df['source_comp_id'] = str(comp['competitionId'])
+
+        ## get entrant data
+        df = pd.merge(
+            df[['source_comp_id','overall_rank','overall_points','scores']],
+            df['entrant'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'competitorId':'source_athlete_id',
+            'competitorName':'display_name'
+        })
+        df['overall_rank'] = pd.to_numeric(df['overall_rank'],errors='coerce')
+        
+        return df
+
+    def get_entrants_frame(
+        self, df: pd.DataFrame
+    ):
+        entrants_df = df.reindex(columns=[
+            'source_comp_id','gender','source_athlete_id',
+            'display_name','overall_rank','overall_points','status'
+        ])
+        entrants_df['dq'] = entrants_df['status']\
+                .str.contains('DQ',case=False).fillna(False)
+        if entrants_df['overall_points'].str.contains(':').all():
+            entrants_df['overall_points'] = entrants_df['overall_points']\
+                .str.split(':').apply(lambda x: int(x[0]) * 60 + int(x[1]))
+        else:
+            entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
+        entrants_df = entrants_df.drop(columns=['status'])
+
+        return entrants_df
+
+    def get_scores_frame(
+        self, df: pd.DataFrame
+    ):
+        scores_df = df[['source_comp_id','gender','source_athlete_id','scores']]\
+            .explode('scores',ignore_index=True)
+        scores_df = pd.merge(
+            scores_df[['source_comp_id','gender','source_athlete_id']],
+            scores_df['scores'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'ordinal':'source_workout_id',
+            'scoreDisplay':'score_display'
+        })
+        if 'points' not in scores_df.columns:
+            scores_df['points'] = scores_df['score']
+
+        scores_df['source_workout_id'] = scores_df['source_workout_id'].astype(str)
+        scores_df['rank'] = pd.to_numeric(scores_df['rank'],errors='coerce')
+        scores_df['points'] = pd.to_numeric(scores_df['points'],errors='coerce')
+        scores_df.loc[
+            scores_df['score_display'].str.len().eq(0),
+            'score_display'
+        ] = '--'
+
+        ## tiebreaker is sometimes found in the breakdown of the workout
+        if 'breakdown' in scores_df.columns:
+            scores_df['tiebreak_display'] = scores_df['breakdown']\
+                .str.lower().str.extract('tiebreak: (.*)')
+        else:
+            scores_df['tiebreak_display'] = None
+
+        scores_df = scores_df.reindex(columns=[
+            'source_comp_id','gender','source_athlete_id',
+            'source_workout_id','score_display','tiebreak_display',
+            'rank','points'
+        ])
+
+
+        return scores_df
+
+    def parse_leaderboard_page(
+        self,
+        reparse: bool = False,
+        refetch: bool = False,
+        **kwargs
+    ):
+        if refetch:
+            reparse = True
+
+        entrants_blob_name = self.build_parsed_blob_name(model_name='entrants',**kwargs)
+        scores_blob_name = self.build_parsed_blob_name(model_name='scores',**kwargs)
+
+        if not reparse and \
+            self.manager._blob_exists(entrants_blob_name) and \
+                self.manager._blob_exists(scores_blob_name):
+            return
+
+        df = self.get_leaderboard_page_frame(**kwargs,refetch=refetch)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+
+        ## create Entrant and Score pydantic models
+        entrants = [
+            Entrant(**row.dropna())
+            for _, row in entrants_df.iterrows()
+        ]
+
+        scores = [
+            Score(**row.dropna())
+            for _, row in scores_df.iterrows()
+        ]
+        
+        ## upload the models to the inventory
+        self.save_model_to_ndjson(
+            models=entrants,
+            blob_name=entrants_blob_name
+        )
+        self.save_model_to_ndjson(
+            models=scores,
+            blob_name=scores_blob_name
         )
         return
