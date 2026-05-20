@@ -418,9 +418,11 @@ class ScoreItParser(Parser):
         }
 
         meta = [Metadata(**kwargs)]
+        blob_name = self.build_parsed_blob_name(
+            model_name='metadata',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=meta,
-            model_name='metadata'
+            blob_name=blob_name
         )
         return
 
@@ -467,24 +469,15 @@ class ScoreItParser(Parser):
         
         return df
 
-    def parse_leaderboard(
-        self,
-        comp_id: str,
-        division_male: str,
-        division_female: str
-    ):
-        df = self.get_leaderboard_frame(
-            comp_id=comp_id,
-            division_male=division_male,
-            division_female=division_female
-        )
-
+    def get_entrants_frame(self,df: pd.DataFrame):
         ## parse entrants
         entrants_df = df.reindex(
             columns=['source_comp_id','gender','source_athlete_id',
             'display_name','overall_points','overall_rank']
         )
+        return entrants_df
 
+    def get_scores_frame(self,df: pd.DataFrame):
         scores_df = pd.merge(
             df[['source_comp_id','gender','source_athlete_id']],
             df['leaderboardColumnValues'],
@@ -524,6 +517,22 @@ class ScoreItParser(Parser):
             'source_comp_id','gender','source_athlete_id','source_workout_id',
             'score_display','tiebreak_display','rank','points'
         ])
+        return scores_df
+
+    def parse_leaderboard(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
 
         ## output entrants and scores into pydantic models
         entrants = [
@@ -536,13 +545,17 @@ class ScoreItParser(Parser):
         ]
         
         ## upload models as ndjson files
+        blob_name_entrants = self.build_parsed_blob_name(
+            model_name='entrants',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=entrants,
-            model_name='entrants'
+            blob_name=blob_name_entrants
         )
+        blob_name_scores = self.build_parsed_blob_name(
+            model_name='scores',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=scores,
-            model_name='scores'
+            blob_name=blob_name_scores
         )
         return
 
@@ -590,9 +603,11 @@ class CompetitionCornerParser(Parser):
             kwargs['address'] = addr
 
         meta = [Metadata(**kwargs)]
+        blob_name = self.build_parsed_blob_name(
+            model_name='metadata',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=meta,
-            model_name='metadata'
+            blob_name=blob_name
         )
         return
 
@@ -625,24 +640,14 @@ class CompetitionCornerParser(Parser):
                 'name': 'display_name',
                 'place': 'overall_rank',
                 'totalPoints': 'overall_points',
-                'rosterID': 'source_athlete_id'
+                'rosterID': 'source_athlete_id',
+                'isDisqualified': 'dq'
             }
         )
 
         return df
 
-    def parse_leaderboard(
-        self,
-        comp_id: str,
-        division_male: str,
-        division_female: str
-    ):
-        df = self.get_leaderboard_frame(
-            comp_id=comp_id,
-            division_male=division_male,
-            division_female=division_female
-        )
-
+    def get_entrants_frame(self,df: pd.DataFrame):
         ## parse out the entrant data
         entrants_df = df.reindex(columns=[
             'source_comp_id','display_name','gender',
@@ -657,6 +662,9 @@ class CompetitionCornerParser(Parser):
         entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
         entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
 
+        return entrants_df
+
+    def get_scores_frame(self,df: pd.DataFrame):
         ## merge entrant data with the workout scores
         scores_df = pd.merge(
             df[['source_comp_id','source_athlete_id','gender']],
@@ -719,6 +727,23 @@ class CompetitionCornerParser(Parser):
         scores_df['points'] = pd.to_numeric(scores_df['points'],errors='coerce')
         scores_df['rank'] = pd.to_numeric(scores_df['rank'],errors='coerce')
 
+        return scores_df
+
+    def parse_leaderboard(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+
         ## convert the entrants and scores to pydantic models
         entrants = [
             Entrant(**row.dropna().to_dict()) 
@@ -730,13 +755,17 @@ class CompetitionCornerParser(Parser):
         ]
 
         ## upload the models to the inventory
+        blob_name_entrants = self.build_parsed_blob_name(
+            model_name='entrants',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=entrants,
-            model_name='entrants'
+            blob_name=blob_name_entrants
         )
+        blob_name_scores = self.build_parsed_blob_name(
+            model_name='scores',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=scores,
-            model_name='scores'
+            blob_name=blob_name_scores
         )
         return
 
