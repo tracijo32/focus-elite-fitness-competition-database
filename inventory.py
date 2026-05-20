@@ -184,3 +184,28 @@ class ScoreItInventoryManager(InventoryManager):
             source='score-it',
             api_data_path=api_data_path
         )
+
+class CrossFitInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.CrossFitAPIRequestClient(),
+            source='crossfit',
+            api_data_path=api_data_path
+        )
+
+    @staticmethod
+    def _get_lb_pg_cnt(data):
+        return int(data['pagination']['totalPages'])
+
+    def _build_lb_pg_blob(self, **kwargs):
+        comp_id = kwargs['comp_id']
+        comp_type = kwargs['comp_type']
+        division = kwargs['div_id']
+        page = kwargs['page']
+        
+        if comp_type == 'open':
+            scaled_str = '/scaled=0/'
+        else:
+            scaled_str = '/'
+        
+        return f'{self.prefix}/comp={comp_id}/division={division}{scaled_str}page={page}.json'
