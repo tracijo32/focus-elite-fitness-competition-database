@@ -564,7 +564,18 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
     dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
+def parse_metadata_all(gcp=False):
+    inpath = 'manual/raw/manual-metadata-all.json'
+    meta_all = json.loads(load_data(inpath,gcp=gcp))
+    for m in meta_all:
+        meta = Metadata(**m)
+        outpath = f'manual/parsed/{meta.source_comp_id}/metadata.ndjson'
+        meta_json = meta.model_dump_json()
+        dump_data(meta_json,outpath,gcp=gcp)
+    return
+
 def parse_all(gcp=False):
+    parse_metadata_all(gcp=gcp)
     try:
         parse_scc2019_leaderboard(gcp=gcp)
     except Exception as e:
@@ -591,5 +602,4 @@ def parse_all(gcp=False):
         print(f'Error parsing RCC 2019: {e}')
 
 if __name__ == '__main__':
-    import os
     parse_all(gcp=True)
