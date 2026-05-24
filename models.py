@@ -8,7 +8,7 @@ class Entrant(BaseModel):
     source_athlete_id: str
     overall_rank: int | None = None
     overall_points: float | None = None
-    disqualified: bool = False
+    dq: bool = False
 
 class Score(BaseModel):
     source_comp_id: str
