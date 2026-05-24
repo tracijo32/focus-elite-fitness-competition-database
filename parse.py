@@ -136,6 +136,7 @@ class StrongestParser(Parser):
             entrants_df['overall_points'],
             errors='coerce'
         )
+        entrants_df['dq'] = False
 
         ## create a dataframe of the scores
         ## has workout number, score, rank, and points
@@ -475,6 +476,7 @@ class ScoreItParser(Parser):
             columns=['source_comp_id','gender','source_athlete_id',
             'display_name','overall_points','overall_rank']
         )
+        entrants_df['dq'] = False
         return entrants_df
 
     def get_scores_frame(self,df: pd.DataFrame):
@@ -652,7 +654,7 @@ class CompetitionCornerParser(Parser):
         entrants_df = df.reindex(columns=[
             'source_comp_id','display_name','gender',
             'overall_rank','overall_points',
-            'source_athlete_id'
+            'source_athlete_id','dq'
         ]).astype({
             'source_comp_id':str,
             'source_athlete_id':str,
@@ -661,6 +663,7 @@ class CompetitionCornerParser(Parser):
         })
         entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
         entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
+        entrants_df['dq'] = entrants_df['dq'].fillna(False).astype(bool)
 
         return entrants_df
 
@@ -780,21 +783,22 @@ class CrossFitParser(Parser):
         d = kwargs['div_id']
         p = kwargs['page']
         blob_name = f'{self.manager.source}/parsed/{model_name}_{c}_{d}_{p}.ndjson'
+        blob_name = f'{self.manager.source}/parsed/comp={c}/division={d}/page={p}/{model_name}.ndjson'
         return blob_name
 
     def get_total_pages(
         self,
         **kwargs
     ):
-        data = self.manager.load_leaderboard_page(**kwargs)
+        data = self.manager.load_leaderboard_page(**kwargs,page=1)
         return data['pagination']['totalPages']
 
     def get_leaderboard_page_frame(
         self, 
-        refetch: bool = False,
+        page: int = 1,
         **kwargs
     ):
-        data = self.manager.load_leaderboard_page(**kwargs, refresh=refetch)
+        data = self.manager.load_leaderboard_page(**kwargs, page=page)
         comp = data['competition']
         df = pd.DataFrame(data['leaderboardRows'])\
             .rename(columns={
@@ -877,23 +881,9 @@ class CrossFitParser(Parser):
         return scores_df
 
     def parse_leaderboard_page(
-        self,
-        reparse: bool = False,
-        refetch: bool = False,
-        **kwargs
+        self, page: int = 1, **kwargs
     ):
-        if refetch:
-            reparse = True
-
-        entrants_blob_name = self.build_parsed_blob_name(model_name='entrants',**kwargs)
-        scores_blob_name = self.build_parsed_blob_name(model_name='scores',**kwargs)
-
-        if not reparse and \
-            self.manager._blob_exists(entrants_blob_name) and \
-                self.manager._blob_exists(scores_blob_name):
-            return
-
-        df = self.get_leaderboard_page_frame(**kwargs,refetch=refetch)
+        df = self.get_leaderboard_page_frame(**kwargs,page=page)
         entrants_df = self.get_entrants_frame(df)
         scores_df = self.get_scores_frame(df)
 
@@ -908,6 +898,11 @@ class CrossFitParser(Parser):
             for _, row in scores_df.iterrows()
         ]
         
+        entrants_blob_name = self.build_parsed_blob_name(
+            model_name='entrants',**kwargs,page=page)
+        scores_blob_name = self.build_parsed_blob_name(
+            model_name='scores',**kwargs,page=page)
+
         ## upload the models to the inventory
         self.save_model_to_ndjson(
             models=entrants,
