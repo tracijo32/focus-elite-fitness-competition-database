@@ -186,19 +186,29 @@ def create_location_overrides_external_table():
 
 def create_athletes_master_external_table():
     ext_conf = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
-    ext_conf.source_uris = [f'gs://{BUCKET_NAME}/consolidated/athletes_master.json']
+    ext_conf.source_uris = [f'gs://{BUCKET_NAME}/consolidated/athletes_master.ndjson']
 
     schema = [
-        bigquery.SchemaField('athlete_id', 'INTEGER', 'REQUIRED'),
+        bigquery.SchemaField('global_athlete_id', 'INTEGER', 'REQUIRED'),
         bigquery.SchemaField('name', 'STRING', 'REQUIRED'),
         bigquery.SchemaField('gender', 'STRING', 'REQUIRED'),
         bigquery.SchemaField('first_name', 'STRING', 'REPEATED'),
         bigquery.SchemaField('last_name', 'STRING', 'REPEATED'),
-        bigquery.SchemaField('cf_id', 'INTERGER', 'REPEATED'),
-        
-
+        bigquery.SchemaField('nickname', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('cf_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('si_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('cc_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('str_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('mn_id', 'STRING', 'REPEATED')
     ]
     table = bigquery.Table(f'{gcp_params.project_id}.staging.athletes_master')
+    table.schema = schema
+    table.external_data_configuration = ext_conf
+
+    CLIENT.delete_table(table, not_found_ok=True)
+    CLIENT.create_table(table)
+
+    return table
 
 if __name__ == '__main__':
 
@@ -207,4 +217,5 @@ if __name__ == '__main__':
     # create_entrant_external_table()
     # create_scores_external_table()
     # create_athlete_external_table()
-    create_location_overrides_external_table()
+    # create_location_overrides_external_table()
+    create_athletes_master_external_table()
