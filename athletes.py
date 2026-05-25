@@ -1,60 +1,45 @@
 import pandas as pd
 from unidecode import unidecode
 from inventory import BUCKET
+import json
 
-REQUIRED_COLUMNS = [
-    'global_athlete_id','name','gender','first_name',
-    'last_name','cf_id','cc_id','si_id','str_id'
-]
+
 NAME_LIST_COLUMNS = ['first_name','last_name','nickname']
-ALT_ID_LIST_COLUMNS = ['cf_id','si_id','cc_id','str_id']
+ALT_ID_LIST_COLUMNS = ['cf_id','si_id','cc_id','str_id','mn_id']
+STRING_COLUMNS = ['global_athlete_id','name','gender']
 
-#### 
-## quality control and preprocessing
-####
+REQUIRED_COLUMNS = STRING_COLUMNS + ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS
 
-def preprocess_master(master: pd.DataFrame):
-    df = master.copy()
-    missing_cols = set(REQUIRED_COLUMNS) - set(df.columns)
-    assert len(missing_cols) == 0, \
-        f"Missing required columns: {','.join(missing_cols)}"
-
-    df = df.reindex(columns=REQUIRED_COLUMNS)\
-        .sort_values(by='global_athlete_id')\
-            .reset_index(drop=True)
-
-    ## these fields are required for all rows
-    req_fields = ['global_athlete_id','name','gender']
-    f = df[req_fields].notnull().all()
-    assert f.all(), f"Missing required fields: {','.join(f[f.eq(False)].index)}"
+def format_and_validate(df: pd.DataFrame):
+    df = df.reindex(columns=REQUIRED_COLUMNS)
     df['global_athlete_id'] = df['global_athlete_id'].astype(int)
     df['name'] = df['name'].astype(str)
     df['gender'] = df['gender'].astype(str)
 
-    ## each of these columns should be a list of strings
-    ## let's make sure the strings are all stripped of whitespace, 
-    ## don't have duplicates, and are sorted
-    ## anything that isn't a list is None
-    list_cols = NAME_LIST_COLUMNS + ALT_ID_LIST_COLUMNS
-    for col in list_cols:
+    ## check that there are no missing values
+    assert df.notnull().all().all(), "Missing required fields"
+
+    ## check that each column is a list
+    for col in NAME_LIST_COLUMNS + ALT_ID_LIST_COLUMNS:
+        assert df[col].apply(lambda x: isinstance(x, list)).all(), \
+            f"Column {col} is not a list"
+
+    ## make sure there is at least one first name and one last name for each row
+    assert df[['first_name','last_name']].apply(lambda x: len(x) > 0).all(), \
+        "Missing first or last name for some rows"
+
+
+    ## make sure there are no duplicates strings in the list
+    for col in NAME_LIST_COLUMNS + ALT_ID_LIST_COLUMNS:
         df[col] = df[col].apply(
-            lambda x: sorted(list({str(s).strip() for s in x}))
-            if isinstance(x, list) else None
+            lambda x: list(sorted(list(set(x))))
         )
-
-    ## there must be at least one first name and one last name for each row
-    assert df[['first_name','last_name']]\
-    .apply(lambda x: len(x) > 0 if x is not None else False)\
-        .all(), "Missing first or last name for some rows"
+ 
+    ## check that there are no duplicate ids
+    assert not df.duplicated(subset=['global_athlete_id']).any(),\
+         "Duplicate global_athlete_id"
     
-    ## unfortunately, we are restricted to the gender binary 
-    assert df['gender'].isin(['M','F']).all(), "Invalid gender"
-
-    ## we can't have any duplicated global_athlete_ids
-    assert not df['global_athlete_id'].duplicated().any(), \
-        "Duplicated global_athlete_id"
-
-    ## each alternate id should be unique to one global_athlete_id
+    ## check that each alternate id is unique to one global_athlete_id
     for col in ALT_ID_LIST_COLUMNS:
         alt = df[['global_athlete_id',col]]\
             .explode(col,ignore_index=True)\
@@ -62,7 +47,7 @@ def preprocess_master(master: pd.DataFrame):
         n_alt = alt.groupby(col)['global_athlete_id'].nunique()
         assert n_alt.eq(1).all(), \
             f"Duplicated {col}: {n_alt[n_alt.gt(1)].index.tolist()}"
-    
+
     return df
 
 def get_name_variants_frame(
@@ -84,7 +69,7 @@ def get_name_variants_frame(
         df['name_variant'] = df['name_variant'].str.lower()
     return df.reindex(columns=['global_athlete_id','gender','name_variant'])
     
-def check_duplicate_ids_on_name(
+def get_duplicate_ids_on_name(
     master_pp: pd.DataFrame
 ):
     nm_var = get_name_variants_frame(master_pp)
@@ -92,9 +77,10 @@ def check_duplicate_ids_on_name(
         nm_var, nm_var,
         on=['gender','name_variant']
     )
-    dups = sf_jn['global_athlete_id_x'].eq(sf_jn['global_athlete_id_y'])
-    assert not dups.any(), f"Duplicate ids: {sf_jn[dups]['global_athlete_id_x'].tolist()}"
-    return True
+    dups = sf_jn['global_athlete_id_x'].gt(sf_jn['global_athlete_id_y'])
+    if dups.any():
+        return sf_jn[dups]
+    return
 
 #####
 ## appending and merging
@@ -105,7 +91,7 @@ def add_list_value_to_master(
     column: str,
     value: str
 ):
-    assert column in ['first_name','last_name','si_id', 'cc_id', 'str_id'], \
+    assert column in ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS, \
         f"Invalid column name: {column}"
 
     assert column in master.columns, f"Column {column} not in master"
@@ -126,3 +112,34 @@ def add_list_value_to_master(
     master.loc[idx] = pd.Series(x)
     return master
 
+def format_for_master(df: pd.DataFrame):
+    df = df.reindex(columns=REQUIRED_COLUMNS)
+    for col in ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS:
+        df[col] = df[col].apply(
+            lambda x: x if isinstance(x,list) else 
+            str(x).split(',') if isinstance(x,int) or isinstance(x,str)
+            else [])
+    return df
+
+## IO functions
+def load_master():
+    blob = BUCKET.blob('consolidated/athletes_master.ndjson')
+    string_data = blob.download_as_string().decode('utf-8')
+    data = [json.loads(line) for line in string_data.split('\n') if line]
+    df = pd.DataFrame(data)
+    df = format_and_validate(df)
+    return df
+
+def upload_master(master: pd.DataFrame):
+    m = format_and_validate(master)
+    m_json = m.to_json(orient='records', lines=True)
+    blob = BUCKET.blob('consolidated/athletes_master.ndjson')
+    blob.upload_from_string(m_json, content_type='application/ndjson')
+
+def backup_master():
+    ts = int(pd.Timestamp.now().timestamp())
+    old_blob = BUCKET.blob(f'consolidated/athletes_master.ndjson')
+    new_blob = BUCKET.blob(f'consolidated/athletes_master_{ts}.ndjson')
+    new_blob.upload_from_string(
+        old_blob.download_as_string().decode('utf-8'), 
+    content_type='application/ndjson')
