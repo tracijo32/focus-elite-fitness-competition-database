@@ -1,5 +1,31 @@
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, field_validator
+from datetime import datetime, date
+
+def convert_date_to_string(v: str | datetime | date | None) -> str | None:
+    if isinstance(v, datetime) or isinstance(v, date):
+        return v.strftime('%Y-%m-%d')
+    elif isinstance(v, str):
+        try:
+            return datetime.strptime(v, '%Y-%m-%d')\
+                .strftime('%Y-%m-%d')
+        except ValueError:
+            raise ValueError(f"Invalid date format: {v}")
+    else:
+        return v
+
+def convert_time_to_string(v: str | datetime | None) -> str | None:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                dt = " ".join(v.split(' ')[:2])
+                datetime.strptime(dt,'%Y-%m-%d %H:%M')
+                return v
+            except ValueError:
+                raise ValueError(f"Invalid time format: {v}")
+        elif isinstance(v, datetime):
+            return v.strftime('%Y-%m-%d %H:%M')
+        return v
 
 class Entrant(BaseModel):
     source_comp_id: str
@@ -31,7 +57,36 @@ class Metadata(BaseModel):
     lng: float | None = None
     virtual: bool
 
-from pydantic import BaseModel
+class Workout(BaseModel):
+    source_comp_id: str
+    source_workout_id: str
+    workout_name: str
+    seq: int
+    date: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    description: str | None = None
+
+    @field_validator('date',mode='before')
+    def validate_date(cls, v):
+        if v is None:
+            return None
+        try:
+            return datetime.strptime(v, '%Y-%m-%d')\
+                .strftime('%Y-%m-%d')
+        except ValueError:
+            raise ValueError(f"Invalid date format: {v}")
+
+    @field_validator('start_time', 'end_time',mode='before')
+    def validate_time(cls, v):
+        if v is None:
+            return None
+        try:
+            dt = " ".join(v.split(' ')[:2])
+            datetime.strptime(dt,'%Y-%m-%d %H:%M')
+            return v
+        except ValueError:
+            raise ValueError(f"Invalid time format: {v}")
 
 class CrossFitEntrant(BaseModel):
     cf_id: int
