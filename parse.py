@@ -1,10 +1,11 @@
 from pydantic import BaseModel
 import inventory
 import pandas as pd
-from models import Entrant, Score, Metadata
+from models import Entrant, Score, Metadata, Workout
 from util import convert_value_to_display
 from parameters import GoogleCloudParameters
 from geopy.geocoders import GoogleV3
+from bs4 import BeautifulSoup
 
 class Parser:
     def __init__(self, manager: inventory.InventoryManager):
@@ -67,12 +68,32 @@ class StrongestParser(Parser):
     def get_workout_frame(self, comp_id: str):
         workouts = self.manager.load_workouts(comp_id=comp_id)
         wo_df = pd.DataFrame(workouts['data']).assign(comp_id=comp_id)\
-            [['comp_id','id','title']]\
+            [['comp_id','id','title','content']]\
             .rename(columns={
                 'id': 'workout_id',
-                'title': 'workout_name'
+                'title': 'workout_name',
+                'content': 'description'
             })
         return wo_df
+
+    def get_config_frame(
+        self,
+        comp_id: str
+    ):
+        config = self.manager.load_event_configs(comp_id=comp_id)
+        if len(config['data']) == 0:
+            return pd.DataFrame()
+        conf_df = pd.DataFrame(config['data']).assign(comp_id=comp_id)\
+            [['comp_id','division','workout','startTime','endTime']]\
+                .rename(columns={
+                    'division': 'div_id',
+                    'workout': 'workout_id',
+                    'startTime': 'start_time',
+                    'endTime': 'end_time'
+                })
+        conf_df['start_time'] = pd.to_datetime(conf_df['start_time'])
+        conf_df['end_time'] = pd.to_datetime(conf_df['end_time'])
+        return conf_df
 
     def get_leaderboard_frame(
         self, 
@@ -110,7 +131,8 @@ class StrongestParser(Parser):
             division_female=division_female
         )
         sp_df = self.get_policy_frame(comp_id=comp_id)
-        wo_df = self.get_workout_frame(comp_id=comp_id)
+        wo_df = self.get_workout_frame(comp_id=comp_id)\
+            .drop(columns=['description'])
 
         ## create a dataframe of the entrants
         ## has entrant name, overall rank, and overall points
@@ -352,7 +374,7 @@ class StrongestParser(Parser):
         )
         return
 
-    def parse_metadata(self,comp_id: str):
+    def parse_metadata(self, comp_id: str):
         data = self.manager.load_metadata(comp_id=comp_id)['data']
 
         start = pd.to_datetime(data['dateTimeStart']).date()
@@ -377,6 +399,60 @@ class StrongestParser(Parser):
             model_name='metadata',comp_id=comp_id)
         self.save_model_to_ndjson(
             models=meta,
+            blob_name=blob_name
+        )
+        return
+
+    def parse_workouts(
+        self, 
+        comp_id: str, 
+        division_male: str, 
+        division_female: str
+    ):
+        wo_df = self.get_workout_frame(comp_id=comp_id)
+        wo_df['description'] = wo_df['description'].apply(
+            lambda x: ''.join(str(p) for p in 
+            BeautifulSoup(x, 'html.parser').find_all('p'))
+        )
+
+        conf_df = self.get_config_frame(comp_id=comp_id)
+        if len(conf_df) == 0:
+            df = wo_df.rename(columns={
+                'comp_id':'source_comp_id','workout_id':'source_workout_id'
+            })
+            df['seq'] = df['workout_name'].rank().astype(int)
+        else:
+            conf_df = conf_df[
+                conf_df['div_id'].isin([division_male,division_female])
+            ]
+            conf_df = conf_df.groupby('workout_id').agg(
+                start_time=('start_time','min'),
+                end_time=('end_time','max')
+            ).reset_index()
+            conf_df['seq'] = conf_df['start_time'].rank().astype(int)
+            conf_df['date'] = conf_df['end_time'].dt.strftime('%Y-%m-%d')
+            conf_df['start_time'] = conf_df['start_time'].dt.strftime('%Y-%m-%d %H:%M')
+            conf_df['end_time'] = conf_df['end_time'].dt.strftime('%Y-%m-%d %H:%M')
+            
+            df = pd.merge(
+                conf_df,
+                wo_df,
+                on=['workout_id']
+            )
+            df = df.sort_values(by=['seq'])\
+                .rename(columns={
+                    'comp_id': 'source_comp_id',
+                    'workout_id': 'source_workout_id'
+                })
+
+        workouts = [
+            Workout(**row.dropna().to_dict())
+            for _, row in df.iterrows()
+        ]
+        blob_name = self.build_parsed_blob_name(
+            model_name='workouts',comp_id=comp_id)
+        self.save_model_to_ndjson(
+            models=workouts,
             blob_name=blob_name
         )
         return
