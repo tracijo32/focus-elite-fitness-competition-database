@@ -235,6 +235,9 @@ class StrongestAPIRequestClient(APIRequestClient):
     def fetch_scoring_policies(self, comp_id: str, **kwargs):
         return self._request_json(f"/competitions/{comp_id}/scoring-policies/")
 
+    def fetch_event_configs(self, comp_id: str, **kwargs):
+        return self._request_json(f"/competitions/{comp_id}/event-configs/")
+
 class ScoreItAPIRequestClient(APIRequestClient):
     def __init__(self, *args, **kwargs):
         super().__init__(base_url="https://scoreit.co.za")
