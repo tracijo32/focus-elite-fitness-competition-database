@@ -1,5 +1,6 @@
 import time
 import requests
+import re
 
 class APIRequestClient:
     def __init__(
@@ -170,6 +171,24 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
 
     def fetch_divisions(self, comp_id: int, **kwargs):
         return self._request_json(f"/leaderboard/{comp_id}")
+
+    def fetch_workouts(self, comp_id: int, div_id: int | str, **kwargs):
+        path = f'/lookups/{comp_id}/workouts'
+        if isinstance(div_id, str):
+            div_id = re.search(r'(\d+)', div_id).group(1)
+        params = {
+            'divisionId': div_id,
+            'excludeCalculatedWorkouts': True,
+            'preview': False
+        }
+        return self._request_json(path, params=params)
+
+    def fetch_workout_description(self, comp_id: int, workout_id: int, **kwargs):
+        path = f'/events/{comp_id}/workouts/{workout_id}/public'
+        params = {
+            'preview': False
+        }
+        return self._request_json(path, params=params)
 
     def fetch_leaderboard_page(
         self, 
