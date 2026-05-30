@@ -155,6 +155,10 @@ def fetch_semifinals_workouts(year: int):
         workouts = fetch_stage_workout('semifinals', year,max_seq=8)
     return workouts
 
+def fetch_lcq_workouts(year: int):
+    workouts = fetch_stage_workout('lastchance', year,max_seq=4)
+    return workouts
+
 def fetch_regionals_workouts(year: int):
     if year <= 2016:
         return fetch_stage_workout_old(year, 'regionals')
@@ -190,13 +194,21 @@ def run_scrape(
 if __name__ == '__main__':
     cf_workouts_path = 'crossfit_workouts/raw'
 
+
     run_scrape(
-        scrape_fn=fetch_games_workouts,
-        comp_type='games',
-        years=range(2007,2026),
+        scrape_fn=fetch_lcq_workouts,
+        comp_type='lcq',
+        years=[2021,2022],
         root_path=cf_workouts_path,
         overwrite=True
     )
+    # run_scrape(
+    #     scrape_fn=fetch_games_workouts,
+    #     comp_type='games',
+    #     years=range(2007,2026),
+    #     root_path=cf_workouts_path,
+    #     overwrite=True
+    # )
 
     # run_scrape(
     #     scrape_fn=fetch_open_workouts,
