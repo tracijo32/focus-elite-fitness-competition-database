@@ -152,6 +152,9 @@ class StrongestInventoryManager(InventoryManager):
     def _build_scoring_blob(self, **kwargs):
         return f'{self.prefix}/{kwargs["comp_id"]}/scoring_policies.json'
 
+    def _build_event_configs_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/event-configs.json'
+
     def load_divisions(self, refresh: bool = False, **kwargs):
         return self._load_or_fetch(
             self._build_divisions_blob,
@@ -173,6 +176,14 @@ class StrongestInventoryManager(InventoryManager):
         return self._load_or_fetch(
             self._build_scoring_blob,
             self.api_client.fetch_scoring_policies,
+            refresh,
+            **kwargs
+        )
+
+    def load_event_configs(self, refresh: bool = False, **kwargs):
+        return self._load_or_fetch(
+            self._build_event_configs_blob,
+            self.api_client.fetch_event_configs,
             refresh,
             **kwargs
         )
