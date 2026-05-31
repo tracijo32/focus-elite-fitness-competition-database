@@ -190,6 +190,18 @@ class CompetitionCornerAPIRequestClient(APIRequestClient):
         }
         return self._request_json(path, params=params)
 
+    def fetch_workout_schedule(self, workout_id: int, div_id: int | str, **kwargs):
+        if isinstance(div_id, str):
+            div_id = re.search(r'(\d+)', div_id).group(1)
+        path = f'/schedule/workout/{workout_id}'
+        params = {
+            'divisionId': div_id
+        }
+        try:
+            return self._request_json(path, params=params)
+        except:
+            return []
+
     def fetch_leaderboard_page(
         self, 
         comp_id: int, 
