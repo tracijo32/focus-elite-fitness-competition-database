@@ -128,6 +128,39 @@ class CompetitionCornerInventoryManager(InventoryManager):
             source='competition-corner',
             api_data_path=api_data_path
         )
+    
+    def _build_workout_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/workouts/{kwargs["div_id"]}.json'
+
+    def _build_workout_description_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/workout_description/{kwargs["workout_id"]}.json'
+
+    def _build_workout_schedule_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/workout_schedule/{kwargs["workout_id"]}_{kwargs["div_id"]}.json'
+
+    def load_workouts(self, refresh: bool = False, **kwargs):
+        return self._load_or_fetch(
+            self._build_workout_blob,
+            self.api_client.fetch_workouts,
+            refresh,
+            **kwargs
+        )
+    
+    def load_workout_description(self, refresh: bool = False, **kwargs):
+        return self._load_or_fetch(
+            self._build_workout_description_blob,
+            self.api_client.fetch_workout_description,
+            refresh,
+            **kwargs
+        )
+
+    def load_workout_schedule(self, refresh: bool = False, **kwargs):
+        return self._load_or_fetch(
+            self._build_workout_schedule_blob,
+            self.api_client.fetch_workout_schedule,
+            refresh,
+            **kwargs
+        )
 
 class StrongestInventoryManager(InventoryManager):
     def __init__(self, api_data_path: str = 'api'):
