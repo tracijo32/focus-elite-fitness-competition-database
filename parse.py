@@ -848,6 +848,145 @@ class CompetitionCornerParser(Parser):
         )
         return
 
+    def get_workout_frames(
+        self,
+        comp_id: int,
+        division_male: str,
+        division_female: str
+    ):
+
+        wo_list = [
+            {
+                'div_id': div_id,
+                **d
+            }
+            for div_id in [division_male, division_female]
+            for d in self.manager.load_workouts(
+                comp_id=comp_id,
+                div_id=div_id
+            )
+        ]
+
+        wo_sch = [
+            {
+                'div_id': w['div_id'],
+                'key': w['key'],
+                **d
+            }
+            for w in wo_list
+            for d in self.manager.load_workout_schedule(
+                comp_id=comp_id,
+                div_id=w['div_id'],
+                workout_id=w['key']
+            )
+        ]
+
+        wo_ids = set(w['key'] for w in wo_list)
+        wo_desc = [
+            self.manager.load_workout_description(
+                comp_id=comp_id,
+                workout_id=w
+            )
+            for w in wo_ids
+        ]
+
+        if len(wo_sch) > 0:
+            ## schedule contains heat start times
+            sch_df = pd.DataFrame(wo_sch)[['key','time']]\
+                .rename(columns={'key':'workout_id','time':'start_time'})
+        else:
+            sch_df = pd.DataFrame()
+
+        ## description contains workout name and description
+        desc_df = pd.DataFrame(wo_desc)[['id','name','description','scheduleDate']]\
+            .rename(columns={'id':'workout_id','name':'workout_name','scheduleDate':'date'})
+
+        return sch_df, desc_df
+
+    def parse_workouts(
+        self,
+        comp_id: int,
+        division_male: str,
+        division_female: str
+    ):
+        sch_df, desc_df = self.get_workout_frames(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        ## the description frame has the date and the schdule has the time
+        ## we need to get the year from the metadata and add it to the date
+        metadata = self.manager.load_metadata(comp_id=comp_id)
+        yr = pd.to_datetime(metadata['startDate']).year
+        desc_df['date'] = desc_df['date'] + ', ' + str(yr)
+        desc_df['date'] = pd.to_datetime(desc_df['date'],format='%A, %B %d, %Y')\
+            .dt.strftime('%Y-%m-%d')
+
+        if len(sch_df) > 0:
+            heats = pd.merge(
+                sch_df, 
+                desc_df[['workout_id','date']],
+                on='workout_id'
+            )
+            heats['start_time'] = heats['date'] + ' ' + heats['start_time']
+            t1 = pd.to_datetime(heats['start_time'],
+                        format='%Y-%m-%d %I:%M %p',errors='coerce')
+            t2 = pd.to_datetime(heats['start_time'],
+                        format='%Y-%m-%d %H:%M',errors='coerce')
+            heats['start_time'] = t1.fillna(t2)
+            
+            ## we can get the end times by figureing out the time between each heat
+            ## and then filling in the blanks with the minimum duration
+            heats = heats.sort_values(by=['workout_id','start_time'])\
+                .drop(columns=['date'])
+            heats['end_time'] = heats.groupby('workout_id')['start_time'].shift(-1)
+            heats['duration'] = heats['end_time'] - heats['start_time']
+            heats['duration'] = heats['duration'].fillna(
+                heats.groupby('workout_id')['duration'].transform('min')
+            )
+
+            heats['end_time'] = heats['start_time'] + heats['duration']
+
+            heats = heats.groupby('workout_id').agg(
+                start_time=('start_time','min'),
+                end_time=('end_time','max')
+            ).reset_index()
+
+            heats['start_time'] = heats['start_time'].dt.strftime('%Y-%m-%d %H:%M')
+            heats['end_time'] = heats['end_time'].dt.strftime('%Y-%m-%d %H:%M')
+
+            df = pd.merge(
+                desc_df,
+                heats,
+                on='workout_id',
+                how='left'
+            )
+        else:
+            df = desc_df
+
+        df = df.assign(source_comp_id=str(comp_id))\
+            .rename(columns={'workout_id':'source_workout_id'})\
+                .reindex(columns=[
+                    'source_comp_id','source_workout_id','workout_name',
+                    'description','date','start_time','end_time'
+                ]).sort_values(by=['date','start_time','workout_name'])\
+                    .reset_index(drop=True)
+        df['source_workout_id'] = df['source_workout_id'].astype(str)
+        df['seq'] = df.index + 1
+
+        blob_name_workouts = self.build_parsed_blob_name(
+            model_name='workouts',comp_id=comp_id)
+        workouts = [
+            Workout(**row.dropna().to_dict())
+            for _, row in df.iterrows()
+        ]
+        self.save_model_to_ndjson(
+            models=workouts,
+            blob_name=blob_name_workouts
+        )
+        return
+
 class CrossFitParser(Parser):
     def __init__(self):
         super().__init__(
