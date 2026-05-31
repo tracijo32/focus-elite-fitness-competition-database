@@ -4,13 +4,13 @@ from inventory import BUCKET
 import json
 
 
-NAME_LIST_COLUMNS = ['first_name','last_name','nickname']
+NAME_LIST_COLUMNS = ['first_name','last_name','nickname','is_not']
 ALT_ID_LIST_COLUMNS = ['cf_id','si_id','cc_id','str_id','mn_id']
 STRING_COLUMNS = ['global_athlete_id','name','gender']
 
 REQUIRED_COLUMNS = STRING_COLUMNS + ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS
 
-def format_and_validate(df: pd.DataFrame):
+def validate_master(df: pd.DataFrame):
     df = df.reindex(columns=REQUIRED_COLUMNS)
     df['global_athlete_id'] = df['global_athlete_id'].astype(int)
     df['name'] = df['name'].astype(str)
@@ -70,17 +70,32 @@ def get_name_variants_frame(
     return df.reindex(columns=['global_athlete_id','gender','name_variant'])
     
 def get_duplicate_ids_on_name(
-    master_pp: pd.DataFrame
+    master: pd.DataFrame
 ):
-    nm_var = get_name_variants_frame(master_pp)
+    df = validate_master(master)
+    nm_var = get_name_variants_frame(df)
     sf_jn = pd.merge(
         nm_var, nm_var,
         on=['gender','name_variant']
     )
-    dups = sf_jn['global_athlete_id_x'].gt(sf_jn['global_athlete_id_y'])
-    if dups.any():
-        return sf_jn[dups]
-    return
+
+    sf_jn = sf_jn[sf_jn['global_athlete_id_x'].gt(sf_jn['global_athlete_id_y'])]
+
+    known = df[['global_athlete_id','is_not']]\
+        .explode('is_not').dropna()
+    known.columns = ['global_athlete_id_x','global_athlete_id_y']
+
+    unknown = pd.merge(
+        sf_jn, known,
+        on=['global_athlete_id_x','global_athlete_id_y'],
+        how='left',
+        indicator=True
+    )
+
+    unknown = unknown[unknown['_merge'] == 'left_only'].drop(columns=['_merge'])
+    if unknown.empty:
+        return
+    return unknown
 
 #####
 ## appending and merging
@@ -127,11 +142,11 @@ def load_master():
     string_data = blob.download_as_string().decode('utf-8')
     data = [json.loads(line) for line in string_data.split('\n') if line]
     df = pd.DataFrame(data)
-    df = format_and_validate(df)
+    df = validate_master(df)
     return df
 
 def upload_master(master: pd.DataFrame):
-    m = format_and_validate(master)
+    m = validate_master(master)
     m_json = m.to_json(orient='records', lines=True)
     blob = BUCKET.blob('consolidated/athletes_master.ndjson')
     blob.upload_from_string(m_json, content_type='application/ndjson')
