@@ -97,6 +97,37 @@ def get_duplicate_ids_on_name(
         return
     return unknown
 
+def merge_duplicates(master: pd.DataFrame,):
+    dups = get_duplicate_ids_on_name(master)
+    if len(dups) == 0:
+        return master
+
+    df = master.copy()
+
+    matches = dups[['global_athlete_id_x','global_athlete_id_y']]\
+        .apply(list,axis=1)
+
+    LIST_COLUMNS = ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS
+
+    for match in matches:
+        i = df['global_athlete_id'].isin(match)
+        ## find the duplicate rows
+        m = df[i]
+
+        ## remove both duplicate rows from master
+        df = df[~i]
+
+        ## merge the duplicate rows
+        for c in STRING_COLUMNS:
+            m[c] = m[c].iloc[0]
+
+        m = m.groupby(STRING_COLUMNS)[LIST_COLUMNS].agg(
+            lambda x: list(sorted(set(x.sum())))
+        ).reset_index()
+        df = pd.concat([df, m]).reset_index(drop=True)
+
+    return df
+
 #####
 ## appending and merging
 ####
@@ -135,7 +166,7 @@ def format_for_master(df: pd.DataFrame):
             str(x).split(',') if isinstance(x,int) or isinstance(x,str)
             else [])
     return df
-
+        
 ## IO functions
 def load_master():
     blob = BUCKET.blob('consolidated/athletes_master.ndjson')
