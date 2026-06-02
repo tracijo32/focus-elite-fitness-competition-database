@@ -97,6 +97,18 @@ def create_metadata_external_table():
         ]
     )
 
+def create_workouts_external_table():
+    return _create_external_table_from_model(
+        model = m.Workout,
+        model_name = 'workouts',
+        source_uris = [
+            f'gs://{BUCKET_NAME}/{source}/parsed/*/workouts.ndjson'
+            for source in SOURCES if source != 'crossfit'
+        ] + [
+            f'gs://{BUCKET_NAME}/crossfit/parsed/*/workouts.ndjson'
+        ]
+    )
+
 def create_athlete_external_table():
     bucket_prefix = f'gs://{gcp_params.bucket_name}'
 
@@ -218,4 +230,5 @@ if __name__ == '__main__':
     # create_scores_external_table()
     # create_athlete_external_table()
     # create_location_overrides_external_table()
-    create_athletes_master_external_table()
+    # create_athletes_master_external_table()
+    create_workouts_external_table()
