@@ -14,18 +14,17 @@ def convert_date_to_string(v: str | datetime | date | None) -> str | None:
         return v
 
 def convert_time_to_string(v: str | datetime | None) -> str | None:
-        if v is None:
-            return None
-        if isinstance(v, str):
+        if isinstance(v, datetime):
+            return v.strftime('%Y-%m-%d %H:%M')
+        elif isinstance(v, str):
             try:
                 dt = " ".join(v.split(' ')[:2])
                 datetime.strptime(dt,'%Y-%m-%d %H:%M')
                 return v
             except ValueError:
                 raise ValueError(f"Invalid time format: {v}")
-        elif isinstance(v, datetime):
-            return v.strftime('%Y-%m-%d %H:%M')
-        return v
+        else:
+            return None
 
 class Entrant(BaseModel):
     source_comp_id: str
@@ -69,24 +68,11 @@ class Workout(BaseModel):
 
     @field_validator('date',mode='before')
     def validate_date(cls, v):
-        if v is None:
-            return None
-        try:
-            return datetime.strptime(v, '%Y-%m-%d')\
-                .strftime('%Y-%m-%d')
-        except ValueError:
-            raise ValueError(f"Invalid date format: {v}")
+        return convert_date_to_string(v)
 
     @field_validator('start_time', 'end_time',mode='before')
     def validate_time(cls, v):
-        if v is None:
-            return None
-        try:
-            dt = " ".join(v.split(' ')[:2])
-            datetime.strptime(dt,'%Y-%m-%d %H:%M')
-            return v
-        except ValueError:
-            raise ValueError(f"Invalid time format: {v}")
+        return convert_time_to_string(v)
 
 class CrossFitEntrant(BaseModel):
     cf_id: int
