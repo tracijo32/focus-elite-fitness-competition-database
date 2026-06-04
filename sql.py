@@ -97,6 +97,20 @@ def create_metadata_external_table():
         ]
     )
 
+def create_crossfit_stages_external_table():
+    return _create_external_table_from_model(
+        model = m.CrossFitStage,
+        model_name = 'crossfit_stages',
+        source_uris = [f'gs://{BUCKET_NAME}/consolidated/crossfit_stages.ndjson']
+    )
+
+def create_sources_external_table():
+    return _create_external_table_from_model(
+        model = m.Source,
+        model_name = 'sources',
+        source_uris = [f'gs://{BUCKET_NAME}/consolidated/sources.ndjson']
+    )
+
 def create_workouts_external_table():
     return _create_external_table_from_model(
         model = m.Workout,
@@ -105,7 +119,7 @@ def create_workouts_external_table():
             f'gs://{BUCKET_NAME}/{source}/parsed/*/workouts.ndjson'
             for source in SOURCES if source != 'crossfit'
         ] + [
-            f'gs://{BUCKET_NAME}/crossfit/parsed/*/workouts.ndjson'
+            f'gs://{BUCKET_NAME}/crossfit/parsed/workouts.ndjson'
         ]
     )
 
@@ -231,4 +245,6 @@ if __name__ == '__main__':
     # create_athlete_external_table()
     # create_location_overrides_external_table()
     # create_athletes_master_external_table()
-    create_workouts_external_table()
+    # create_workouts_external_table()
+    # create_crossfit_stages_external_table()
+    create_sources_external_table()
