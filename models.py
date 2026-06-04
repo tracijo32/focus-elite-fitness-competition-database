@@ -74,6 +74,14 @@ class Workout(BaseModel):
     def validate_time(cls, v):
         return convert_time_to_string(v)
 
+class Source(BaseModel):
+    global_comp_id: str
+    priority: int
+    source: str
+    source_comp_id: str
+    leaderboard_url: str | None = None
+    notes: str | None = None
+
 class CrossFitEntrant(BaseModel):
     cf_id: int
     comp_id: int
@@ -113,3 +121,19 @@ class CrossFitScore(BaseModel):
     points: int | None = None
     judge_user_id: int | None = None
 
+class CrossFitStage(BaseModel):
+    global_comp_id: str
+    season: int
+    stage: str
+    comp_id: int | None = None
+    previous_stage: str | None = None
+    next_stage: str | None = None
+
+    @field_validator('comp_id', mode='before')
+    def validate_comp_id(cls, v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            raise ValueError(f"Invalid comp_id: {v}")
