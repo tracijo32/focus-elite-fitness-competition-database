@@ -4,6 +4,7 @@ from google.cloud import storage
 from parameters import GoogleCloudParameters
 from unidecode import unidecode
 from models import Entrant, Score, Metadata
+from util import recover_points_table
 
 gcp_params = GoogleCloudParameters()
 storage_client = storage.Client(project=gcp_params.project_id)
@@ -39,12 +40,43 @@ def dump_data(data,file_path,gcp=False):
         with open(file_path, 'w') as f:
             f.write(data)
 
+def solve_points_table(
+    entrants: list[Entrant],
+    scores: list[Score],
+    gcp: bool = True,
+    refresh: bool = False,
+) -> list[Score]:
+    comp_id = scores[0].source_comp_id
+
+    blob = f"manual/raw/{comp_id}/points_table.json"
+    if file_exists(blob,gcp) and not refresh:
+        points_table = json.load(open(blob))
+    else:
+        points_table = {
+            gender: recover_points_table(
+                [e for e in entrants if e.gender == gender],
+                [s for s in scores if s.gender == gender]
+            )
+            for gender in ["M","F"]
+        }
+        dump_data(json.dumps(points_table),blob,gcp)
+        
+    scores_new = [
+        Score(**{
+            **score.model_dump(),
+            'points':points_table[score.gender].get(score.rank,0)
+        })
+        for score in scores
+    ]
+    return scores_new
+
 def parse_scc2019_leaderboard(gcp=False):
     comp_id = 'scc2019'
     lb_json = load_data(f'manual/raw/{comp_id}/{comp_id}_leaderboard.json',gcp=gcp)
     lb = pd.DataFrame(json.loads(lb_json)).rename(columns={'name':'display_name'})\
         .assign(source_comp_id='scc2019')
     lb['source_athlete_id'] = lb['source_comp_id'] + '_' + \
+        lb['gender'] + '_' + \
         lb['display_name'].rank().astype(int).astype(str)
     lb['dq'] = False
 
@@ -73,6 +105,7 @@ def parse_lcq2025_leaderboard(
             'total_points': 'overall_points'
             })
     df['source_athlete_id'] = df['source_comp_id'] + '_' + \
+        df['gender'] + '_' + \
         df['display_name'].rank().astype(int).astype(str)
     df['dq'] = False
 
@@ -96,6 +129,7 @@ def parse_lcq2025_leaderboard(
         right_index=True
     ).rename(columns={'score': 'score_display','tiebreak': 'tiebreak_display'})
     df['score_display'] = df['score_display'].fillna('--')
+    df['points'] = df['rank'].astype(float)
 
     scores = [
         Score(**row.dropna())
@@ -175,7 +209,9 @@ def parse_ri2019_leaderboard(gcp=False):
 
     idx = lb.index.to_frame().reset_index(drop=True).assign(source_comp_id=comp_id)
     idx['display_name'] = idx['name_lower'].str.title()
-    idx['source_athlete_id'] = idx['source_comp_id'] + '_' + idx['display_name'].rank().astype(int).astype(str)
+    idx['source_athlete_id'] = idx['source_comp_id'] + '_' + \
+        idx['gender'] + '_' + \
+        idx['display_name'].rank().astype(int).astype(str)
     idx['dq'] = False
 
     entrants = [
@@ -235,6 +271,9 @@ def parse_ri2019_leaderboard(gcp=False):
         Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
+
+    scores = solve_points_table(entrants,scores,gcp=gcp)
+
     scores_json = "\n".join([s.model_dump_json() for s in scores])
     dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
 
@@ -288,6 +327,7 @@ def parse_fict2019_leaderboard(gcp=False,refresh=False):
     lb['display_name'] = lb['name']
 
     lb['source_athlete_id'] = lb['source_comp_id'] + '_' + \
+        lb['gender'] + '_' + \
         lb['display_name'].rank().astype(int).astype(str)
     lb['dq'] = False
 
@@ -367,6 +407,7 @@ def parse_isd2019_leaderboard(gcp=False,refresh=False):
         'overallScore':'overall_score'
     }).assign(source_comp_id=comp_id,dq=False)
     entrant_df['source_athlete_id'] = entrant_df['source_comp_id'] + '_' + \
+        entrant_df['gender'] + '_' + \
         entrant_df['display_name'].rank().astype(int).astype(str)
 
     entrants = [
@@ -449,6 +490,7 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
     entrants_df['gender'] = entrants_df['gender'].str.upper()
     entrants_df['display_name'] = entrants_df[['first_name','last_name']].apply(' '.join, axis=1)
     entrants_df['source_athlete_id'] = entrants_df['source_comp_id'] + '_' + \
+        entrants_df['gender'] + '_' + \
         entrants_df['display_name'].rank().astype(int).astype(str)
 
     entrants = [
@@ -473,6 +515,9 @@ def parse_rcc2019_leaderboard(gcp=False,refresh=False):
         Score(**row.dropna())
         for _, row in scores_df.iterrows()
     ]
+
+    scores = solve_points_table(entrants,scores,gcp=gcp)
+
     scores_json = "\n".join([s.model_dump_json() for s in scores])
     dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return

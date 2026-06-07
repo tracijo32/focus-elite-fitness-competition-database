@@ -1,6 +1,7 @@
 """Small helpers not tied to API / storage models."""
 
 import re
+from models import Entrant, Score
 
 def _parse_colon_duration_to_seconds(s: str) -> float | None:
     """Parse ``HH:MM:SS.ss``, ``MM:SS.ss``, or ``:SS.ss`` into total seconds."""
@@ -116,3 +117,113 @@ def convert_value_to_display(score_type: str, value: float) -> str:
         return convert_seconds_to_time_score(value)
     else:
         return str(int(value))
+
+def recover_points_table(
+    entrants: list[Entrant],
+    scores: list[Score],
+):
+
+    """
+    This is a linear programming problem that solves for the points awarded for each rank.
+    Required inputs: simplied to be a list of entrants and scores in pydantic models for a SINGLE
+    competition and gender division.
+    (More than what we actually, need, which is just the list of athletes, how many times they
+    got each rank in individual workouts ,and their total points at the end of the competition).
+    Output: dictionary of rank: points
+    """
+    ## convert the entrants and scores to dataframes"""
+    import pandas as pd
+    entrants_df = pd.DataFrame(
+        [e.model_dump() for e in entrants]
+    )
+    scores_df = pd.DataFrame(
+        [s.model_dump() for s in scores]
+    )
+
+    ## make sure we are only working with one competition and gender division
+    assert scores_df[['source_comp_id','gender']].drop_duplicates().shape[0] == 1
+    assert entrants_df[['source_comp_id','gender']].drop_duplicates().shape[0] == 1
+
+    ## filter out entrants and scores with no points, non-finishers
+    entrants_df = entrants_df.loc[
+        entrants_df['overall_points'].notnull(),
+        ['source_athlete_id','overall_points']
+    ].astype({'source_athlete_id':str,'overall_points':int})
+
+    ## filter out scores with no rank, non-finishers
+    scores_df['rank'] = pd.to_numeric(scores_df['rank'],errors='coerce')
+    scores_df = scores_df[
+        scores_df['source_athlete_id'].isin(entrants_df['source_athlete_id']) &
+        scores_df['rank'].gt(0) & scores_df['rank'].notnull()
+    ].astype({'source_workout_id':str,'rank':int})
+
+    ## create a dataframe where the rows are the athletes,
+    ## thc columns are the ranks/positions
+    ## and values are the number of times the athlete has that rank/position
+    rank_counts = pd.pivot_table(
+        scores_df,
+        index=['source_athlete_id'],
+        columns=['rank'],
+        values='source_workout_id',
+        aggfunc=len,
+        fill_value=0
+    )
+    max_rank = max([c for c in rank_counts.columns])
+
+    ## mmerge with the entrants dataframe to get the total points for each athlete
+    ## that target should be the sum(count of rank * rank points)
+    ## we are solving for rank points
+    rank_counts = pd.merge(
+        rank_counts,
+        entrants_df.set_index('source_athlete_id')['overall_points'],
+        left_index=True,
+        right_index=True
+    )
+    
+    import pulp
+    model = pulp.LpProblem("recover_points_table", pulp.LpMinimize)
+
+    # unknown points awarded for each rank, between 0 and 100
+    points = {
+        r: pulp.LpVariable(f"points_rank_{r}", lowBound=0, upBound=100, cat="Integer")
+        for r in range(1, max_rank + 1)
+    }
+
+    ## we know that first place gets 100 points
+    model += points[1] == 100
+
+    ## we know that each rank gets more points than the next rank
+    for r in range(1, max_rank):
+        model += points[r] >= points[r + 1] + 1
+
+    ## set the predicted scores for each athlete to the sum of the rank points
+    ## and the actual scores for each athlete to the overall points
+    ## we are solving for the rank points
+    predicted_scores = {}
+    errors = {}
+    for i, row in rank_counts.iterrows():
+        predicted = pulp.lpSum(
+            rank_counts.loc[i, r] * points[r]
+            for r in range(1, max_rank + 1)
+        )
+        predicted_scores[i] = predicted
+        actual = int(row["overall_points"])
+
+        err = pulp.LpVariable(f"abs_error_{i}", lowBound=0, cat="Integer")
+        errors[i] = err
+        model += predicted - actual <= err
+        model += actual - predicted <= err
+
+    model += pulp.lpSum(errors.values())
+
+    ## solve the model
+    model.solve()
+
+    ## get the recovered points for each rank
+    ## dictionary of rank: points
+    recovered_points = {
+        r: int(pulp.value(points[r]))
+        for r in range(1, max_rank + 1)
+    }
+
+    return recovered_points
