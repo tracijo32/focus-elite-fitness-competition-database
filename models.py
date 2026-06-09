@@ -79,6 +79,8 @@ class Source(BaseModel):
     priority: int
     source: str
     source_comp_id: str
+    division_male: str
+    division_female: str
     leaderboard_url: str | None = None
     notes: str | None = None
 
