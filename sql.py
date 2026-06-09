@@ -225,7 +225,8 @@ def create_athletes_master_external_table():
         bigquery.SchemaField('si_id', 'STRING', 'REPEATED'),
         bigquery.SchemaField('cc_id', 'STRING', 'REPEATED'),
         bigquery.SchemaField('str_id', 'STRING', 'REPEATED'),
-        bigquery.SchemaField('mn_id', 'STRING', 'REPEATED')
+        bigquery.SchemaField('mn_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('is_not', 'INTEGER', 'REPEATED')
     ]
     table = bigquery.Table(f'{gcp_params.project_id}.staging.athletes_master')
     table.schema = schema
@@ -236,15 +237,144 @@ def create_athletes_master_external_table():
 
     return table
 
-if __name__ == '__main__':
+def _create_view(view_name: str, sql: str, dataset: str = "dev"):
+    view_id = f"{CLIENT.project}.{dataset}.{view_name}"
+    view = bigquery.Table(view_id)
+    view.view_query = sql
+    CLIENT.delete_table(view_id, not_found_ok=True)
+    CLIENT.create_table(view)
+    return view
 
-    # create_competition_index_external_table()
-    # create_metadata_external_table()
-    # create_entrant_external_table()
-    # create_scores_external_table()
-    # create_athlete_external_table()
-    # create_location_overrides_external_table()
-    # create_athletes_master_external_table()
-    # create_workouts_external_table()
-    # create_crossfit_stages_external_table()
+def create_athletes_source_id_view():
+    source_map = {
+        'crossfit': 'cf_id',
+        'strongest': 'str_id',
+        'manual': 'mn_id',
+        'score-it': 'si_id',
+        'competition-corner': 'cc_id'
+    }
+
+    query = "\nUNION ALL\n".join([
+    f"""SELECT 
+        global_athlete_id,
+        "{source}" as source,
+        {col} as source_athlete_id
+    FROM `staging.athletes_master`
+    INNER JOIN UNNEST({col}) AS {col}"""
+        for source, col in source_map.items()
+    ])
+
+    view_name = 'athlete_source_id'
+    return _create_view(view_name, query, 'dev')
+
+def create_source_to_global_entrants_view():
+    query = """
+    WITH comps AS (
+        SELECT global_comp_id, source, source_comp_id
+        FROM `staging.sources`
+        WHERE priority = 1
+    ), entrants_raw AS (
+        SELECT 
+        c.global_comp_id, e.gender, e.display_name, 
+        c.source, c.source_comp_id, e.source_athlete_id,
+        e.overall_points, e.overall_rank, e.dq
+        FROM comps c
+        JOIN `staging.entrants` e
+        ON SPLIT(e._FILE_NAME, '/')[SAFE_OFFSET(3)] = c.source
+        AND c.source_comp_id = e.source_comp_id
+    ), finals_2020 AS (
+        SELECT * FROM entrants_raw
+        WHERE global_comp_id = 'games-2020-finals'
+        AND overall_points > 0
+    ), stage1_2020 AS (
+        SELECT 
+            e.global_comp_id, e.gender, e.display_name,
+            e.source, e.source_comp_id, e.source_athlete_id,
+            CAST(s.score_display AS FLOAT64) as overall_points, 
+            s.rank as overall_rank, e.dq
+        FROM entrants_raw e
+        JOIN `staging.scores` s
+        ON e.source = SPLIT(s._FILE_NAME, '/')[SAFE_OFFSET(3)]
+        AND e.source_comp_id = s.source_comp_id
+        AND e.source_athlete_id = s.source_athlete_id
+        WHERE global_comp_id = 'games-2020-stage1'
+        AND s.source_workout_id = "8"
+    ), entrants AS (
+        SELECT * FROM finals_2020
+        UNION ALL
+        SELECT * FROM stage1_2020
+        UNION ALL
+        SELECT * FROM entrants_raw
+        WHERE global_comp_id NOT IN ('games-2020-finals', 'games-2020-stage1')
+    )
+    SELECT 
+        e.global_comp_id, 
+        e.source,
+        e.source_comp_id,
+        e.gender, e.display_name,
+        CONCAT(
+            e.global_comp_id, '-', e.gender, CAST(ROW_NUMBER() OVER (
+                PARTITION BY e.global_comp_id, e.gender 
+                ORDER BY e.overall_rank
+            ) AS STRING)
+        ) AS global_entrant_id,
+        a.global_athlete_id,
+        e.source_athlete_id,
+        e.overall_rank,
+        CASE
+        WHEN e.overall_points IS NULL THEN NULL
+        WHEN e.global_comp_id = 'games-2008' THEN FORMAT(
+            '%02d:%02d',
+            DIV(CAST(TRUNC(e.overall_points) AS INT64), 60),
+            MOD(CAST(TRUNC(e.overall_points) AS INT64), 60)
+        )
+        ELSE CAST(CAST(TRUNC(e.overall_points) AS INT64) AS STRING)
+        END AS overall_points,
+        e.dq
+    FROM entrants e
+    LEFT JOIN `dev.athlete_source_id` a
+    ON e.source = a.source
+    AND e.source_athlete_id = a.source_athlete_id
+    """
+    view_name = 'source_to_global_entrants'
+    return _create_view(view_name, query, 'dev')
+
+def create_source_to_global_workouts_view():
+    query = """
+    SELECT
+    c.global_comp_id, c.source, w.*,
+    CONCAT(c.global_comp_id, '-S', w.seq) AS global_workout_id
+    FROM `staging.sources` c
+    JOIN `staging.workouts` w
+    ON c.source = SPLIT(w._FILE_NAME, '/')[SAFE_OFFSET(3)]
+    AND c.source_comp_id = w.source_comp_id
+    WHERE c.priority = 1
+    AND NOT (c.global_comp_id = 'games-2020-stage1' AND seq > 8) 
+    AND NOT (c.global_comp_id = 'games-2020-finals' AND seq < 8)
+    """
+    view_name = 'source_to_global_workouts'
+    return _create_view(view_name, query, 'dev')
+
+def create_source_to_global_scores_view():
+    query = """
+    SELECT 
+        w.global_comp_id, w.source, w.source_comp_id, w.source_workout_id, w.global_workout_id,
+        e.source_athlete_id, e.global_entrant_id,
+        s.gender, s.score_display, s.tiebreak_display, s.rank, s.points
+    FROM `dev.source_to_global_workout` w
+    JOIN `staging.scores` s
+    ON w.source = SPLIT(s._FILE_NAME, '/')[SAFE_OFFSET(3)]
+    AND w.source_comp_id = s.source_comp_id
+    AND w.source_workout_id = s.source_workout_id
+    JOIN `dev.source_to_global_entrants` e
+    ON e.source = SPLIT(s._FILE_NAME, '/')[SAFE_OFFSET(3)]
+    AND s.source_comp_id = e.source_comp_id
+    AND s.source_athlete_id = e.source_athlete_id
+    """
+    view_name = 'source_to_global_scores'
+    return _create_view(view_name, query, 'dev')
+
+
+if __name__ == '__main__':
+    #create_source_to_global_workouts_view()
     create_sources_external_table()
