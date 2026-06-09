@@ -1,6 +1,7 @@
 import time
 import requests
 import re
+from bs4 import BeautifulSoup
 
 class APIRequestClient:
     def __init__(
@@ -336,3 +337,141 @@ class WodcastAPIRequestClient(APIRequestClient):
         path = '/GetAffiliateEventOverallResultsService.php'
 
         return self._request_json(path, method='POST', params=params, data=data)
+
+class LocalCompAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url="https://local-comp.com"
+        )
+
+    def fetch_competitions(self):
+        html =  self._request_json(
+            "/controller/event/view-all"
+        )
+        soup = BeautifulSoup(html, 'html.parser')
+        event_spans = soup.find_all('span',attrs={'class': 'eventDetailLink'})
+        events = []
+        for span in event_spans:
+            event_id = span.attrs.get('eventid')
+            event_name = span.text.strip()
+            details = soup.find('div',
+                attrs={'id': f'eventDetailArea-{event_id}'}).text\
+                    .replace('\t','').split('\n')
+            details = [d for d in details if len(d) > 0]
+            events.append({
+                'id': event_id,
+                'name': event_name,
+                'date': details[1]
+                })
+        return events
+
+    def fetch_divisions(
+        self, comp_id: int
+    ):
+        html = self._request_json(
+            "/controller/event/leaderboard",
+            params = {
+                'eventId': comp_id
+            }
+        )
+        soup = BeautifulSoup(html, 'html.parser')
+        dropdown = soup.find('td',attrs={'id': 'eventDivisionDropdownCell'})
+        options = dropdown.find_all('option')
+        divisions = []
+        for option in options:
+            txt = option.text.strip().replace('\t','').split('\n')
+            txt = " ".join([t for t in txt if len(t) > 0])
+            value = option.attrs.get('value')
+            divisions.append({'division_id': value, 'division_name': txt})
+        return divisions
+
+    @staticmethod
+    def get_teams(soup: BeautifulSoup):
+        name_divs = soup.find_all('div',attrs={'class': 'teamName'})
+        entrants = []
+        for div in name_divs:
+            team_name = div.text.strip().title()
+            team_id = div.attrs.get('teamid')
+            r1 = div.find_parent().find_previous_sibling()
+            r2 = r1.find_previous_sibling()
+            if r2 is None:
+                rank = r1.text.strip()
+            else:
+                rank = r2.text.strip()
+            entrants.append({
+                'name': team_name,
+                'id': team_id,
+                'rank': rank
+            })
+        return entrants
+
+    @staticmethod
+    def get_workouts(soup: BeautifulSoup):
+        workout_cells = soup.find_all('td',attrs={'class': 'resultDetailHeader'})
+        workouts = []
+        for cell in workout_cells:
+            workout_name = cell.attrs.get('title')
+            enum = cell.text.strip()
+            workouts.append({
+                'name': workout_name,
+                'enum': enum
+            })
+        return workouts
+
+    @staticmethod
+    def get_points(soup: BeautifulSoup):
+        points_cells = soup.find_all('td',attrs={'class': 'pointsCell'})
+        points = []
+        for cell in points_cells:
+            points.append(cell.text.strip())
+        return points
+
+    @staticmethod
+    def get_results(soup: BeautifulSoup):
+        result_cells = soup.find_all('td',attrs={'class': 'resultDetailCell'})
+        results = []
+        for cell in result_cells:
+            values = [v.text.strip() for v in cell.find_all('div')]
+            results.append(values)
+        return results
+    
+    def fetch_leaderboard_page(
+        self, comp_id: int, div_id: int, 
+        return_soup: bool = False,
+        **kwargs
+    ):
+        html = self._request_json(
+            "/controller/event/ajax/leaderboard-detail",
+            params = {
+                'eventDivisionId': div_id,
+                'eventId': comp_id
+            }
+        )
+        soup = BeautifulSoup(html, 'html.parser')
+        if return_soup:
+            return soup
+        teams = self.get_teams(soup)
+        workouts = self.get_workouts(soup)
+        results = self.get_results(soup)
+        points = self.get_points(soup)
+
+        entrants = [
+            {**t, 'points': p}
+            for t, p in zip(teams, points)
+        ]
+        scores = [
+            {
+                'id': entrants[i // len(workouts)]['id'],
+                'enum': workouts[i % len(workouts)]['enum'],
+                'results': results[i]
+            }
+            for i in range(len(results))
+        ]
+        output = {
+            'comp_id': comp_id,
+            'division_id': div_id,
+            'entrants': entrants,
+            'workouts': workouts,
+            'scores': scores
+        }
+        return output

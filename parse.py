@@ -1128,3 +1128,128 @@ class CrossFitParser(Parser):
             blob_name=scores_blob_name
         )
         return
+
+class LocalCompParser(Parser):
+    def __init__(self):
+        super().__init__(manager=inventory.LocalCompInventoryManager)
+
+    def get_leaderboard_frame(
+        self, 
+        comp_id: int, 
+        division_male: int, 
+        division_female: int
+    ):
+        df = super().get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+        df = pd.merge(
+            df[['gender','page']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        )
+        return df
+
+    def get_entrants_and_scores_frame(self,
+        comp_id: int,
+        division_male: int,
+        division_female: int    
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+
+        entrants_df = df[['comp_id','gender','entrants']]\
+            .explode('entrants',ignore_index=True)
+        entrants_df = pd.merge(
+            entrants_df[['comp_id','gender']],
+            entrants_df['entrants'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id': 'source_comp_id',
+            'id': 'source_athlete_id',
+            'name': 'display_name',
+            'rank': 'overall_rank',
+            'points': 'overall_points'
+        }).astype({
+            'source_comp_id': str,
+            'source_athlete_id': str,
+        })
+
+        entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
+        entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
+        
+        scores_df = df[['comp_id','gender','scores']]\
+            .explode('scores',ignore_index=True)
+        scores_df = pd.merge(
+            scores_df[['comp_id','gender']],
+            scores_df['scores'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id': 'source_comp_id',
+            'id': 'source_athlete_id',
+            'enum': 'source_workout_id'
+        }).astype(
+            {
+                'source_comp_id': str,
+                'source_athlete_id': str,
+                'source_workout_id': str
+            }
+        )
+
+        scores_df['rank_raw'] = scores_df['results'].apply(
+            lambda x: x[0] if len(x) > 0 else None
+        )
+        scores_df['rank_numeric'] = pd.to_numeric(scores_df['rank_raw'],errors='coerce')
+
+        scores_df['score_display'] = scores_df['results'].apply(
+            lambda x: x[1] if len(x) > 1 else None
+        )
+
+        scores_df[['points','rank']] = scores_df['rank_raw'].str.extract(
+            r'(?P<points>\d+\.\d+)\s+\((?P<rank>\d+)\)'
+        )
+
+        scores_df['rank'] = scores_df['rank'].fillna(scores_df['rank_numeric'])
+
+        scores_df['score_display'] = scores_df['score_display'].fillna('--')
+
+        return entrants_df, scores_df
+
+    def parse_leaderboard(
+        self,**kwargs
+    ):
+        entrants_df, scores_df = self.get_entrants_and_scores_frame(
+            **kwargs
+        )
+    
+        entrants = [
+            Entrant(**row.dropna().to_dict())
+            for _, row in entrants_df.iterrows()
+        ]
+
+        scores = [
+            Score(**row.dropna().to_dict())
+            for _, row in scores_df.iterrows()
+        ]
+    
+        blob_name_entrants = self.build_parsed_blob_name(
+            model_name='entrants',**kwargs)
+        self.save_model_to_ndjson(
+            models=entrants,
+            blob_name=blob_name_entrants
+        )
+    
+        blob_name_scores = self.build_parsed_blob_name(
+            model_name='scores',**kwargs)
+        self.save_model_to_ndjson(
+            models=scores,
+            blob_name=blob_name_scores
+        )
+        return

@@ -253,3 +253,22 @@ class CrossFitInventoryManager(InventoryManager):
             scaled_str = '/'
         
         return f'{self.prefix}/comp={comp_id}/division={division}{scaled_str}page={page}.json'
+
+class LocalCompInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.LocalCompAPIRequestClient(),
+            source='local-comp',
+            api_data_path=api_data_path
+        )
+
+    def _build_divisions_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/divisions.json'
+
+    def load_divisions(self, refresh: bool = False, **kwargs):
+        return self._load_or_fetch(
+            self._build_divisions_blob,
+            self.api_client.fetch_divisions,
+            refresh,
+            **kwargs
+        )
