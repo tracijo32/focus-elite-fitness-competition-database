@@ -5,7 +5,7 @@ import json
 
 
 NAME_LIST_COLUMNS = ['first_name','last_name','nickname','is_not']
-ALT_ID_LIST_COLUMNS = ['cf_id','si_id','cc_id','str_id','mn_id']
+ALT_ID_LIST_COLUMNS = ['cf_id','si_id','cc_id','str_id','lc_id','mn_id']
 STRING_COLUMNS = ['global_athlete_id','name','gender']
 
 REQUIRED_COLUMNS = STRING_COLUMNS + ALT_ID_LIST_COLUMNS + NAME_LIST_COLUMNS
@@ -173,7 +173,6 @@ def load_master():
     string_data = blob.download_as_string().decode('utf-8')
     data = [json.loads(line) for line in string_data.split('\n') if line]
     df = pd.DataFrame(data)
-    df = validate_master(df)
     return df
 
 def upload_master(master: pd.DataFrame):
