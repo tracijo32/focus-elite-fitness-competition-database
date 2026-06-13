@@ -45,6 +45,7 @@ class APIRequestClient:
         *,
         method: str = "GET",
         data: dict | None = None,
+        headers: dict | None = None,
     ):
         url = self.base_url + endpoint
         m = method.upper()
@@ -64,10 +65,16 @@ class APIRequestClient:
                     url,
                     params=params,
                     data=data,
+                    headers=headers,
                     timeout=self.timeout_seconds,
                 )
             else:
-                response = requests.get(url, params=params, timeout=self.timeout_seconds)
+                response = requests.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=self.timeout_seconds,
+                )
             self._last_request_ts = time.time()
 
             try:
