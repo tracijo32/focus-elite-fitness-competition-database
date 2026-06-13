@@ -35,11 +35,13 @@ class Parser:
         comp_id: str,
         division_male: str,
         division_female: str,
+        refresh: bool = False,
         **kwargs
     ):
         lb = [
             self.manager.load_leaderboard(
                 comp_id=comp_id,
+                refresh=refresh,
                 **d
             )
             for d in [
@@ -54,8 +56,8 @@ class StrongestParser(Parser):
     def __init__(self):
         super().__init__(manager=inventory.StrongestInventoryManager)
 
-    def get_policy_frame(self, comp_id: str):
-        scoring_policies = self.manager.load_scoring_policies(comp_id=comp_id)
+    def get_policy_frame(self, comp_id: str, refresh: bool = False):
+        scoring_policies = self.manager.load_scoring_policies(comp_id=comp_id, refresh=refresh)
         sp_df = pd.DataFrame(scoring_policies['data']).assign(comp_id=comp_id)\
             [['comp_id','id','division','workout','scoreType',
             'tiebreakerScoreType','tiebreaker2ScoreType','customPointsTable']]\
@@ -65,8 +67,8 @@ class StrongestParser(Parser):
             })
         return sp_df
 
-    def get_workout_frame(self, comp_id: str):
-        workouts = self.manager.load_workouts(comp_id=comp_id)
+    def get_workout_frame(self, comp_id: str, refresh: bool = False):
+        workouts = self.manager.load_workouts(comp_id=comp_id, refresh=refresh)
         wo_df = pd.DataFrame(workouts['data']).assign(comp_id=comp_id)\
             [['comp_id','id','title','content']]\
             .rename(columns={
@@ -78,9 +80,10 @@ class StrongestParser(Parser):
 
     def get_config_frame(
         self,
-        comp_id: str
+        comp_id: str,
+        refresh: bool = False
     ):
-        config = self.manager.load_event_configs(comp_id=comp_id)
+        config = self.manager.load_event_configs(comp_id=comp_id, refresh=refresh)
         if len(config['data']) == 0:
             return pd.DataFrame()
         conf_df = pd.DataFrame(config['data']).assign(comp_id=comp_id)\
@@ -99,12 +102,14 @@ class StrongestParser(Parser):
         self, 
         comp_id: str, 
         division_male: str, 
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
         df = super().get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
         df = pd.merge(
             df[['comp_id','div_id','gender']],
@@ -122,16 +127,18 @@ class StrongestParser(Parser):
         self,
         comp_id: str,
         division_male: str,
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
         ## load all the data
         df = self.get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
-        sp_df = self.get_policy_frame(comp_id=comp_id)
-        wo_df = self.get_workout_frame(comp_id=comp_id)\
+        sp_df = self.get_policy_frame(comp_id=comp_id, refresh=refresh)
+        wo_df = self.get_workout_frame(comp_id=comp_id, refresh=refresh)\
             .drop(columns=['description'])
 
         ## create a dataframe of the entrants
@@ -344,10 +351,10 @@ class StrongestParser(Parser):
         return entrants_df, scores_df
 
     def parse_leaderboard(
-        self, **kwargs
+        self, refresh: bool = False, **kwargs
     ):
 
-        entrants_df, scores_df = self.get_entrants_and_scores_frame(**kwargs)
+        entrants_df, scores_df = self.get_entrants_and_scores_frame(refresh=refresh, **kwargs)
 
         ## convert the entrants and scores to pydantic models
         entrants = [
@@ -374,8 +381,8 @@ class StrongestParser(Parser):
         )
         return
 
-    def parse_metadata(self, comp_id: str):
-        data = self.manager.load_metadata(comp_id=comp_id)['data']
+    def parse_metadata(self, comp_id: str, refresh: bool = False):
+        data = self.manager.load_metadata(comp_id=comp_id, refresh=refresh)['data']
 
         start = pd.to_datetime(data['dateTimeStart']).date()
         end = pd.to_datetime(data['dateTimeEnd']).date()
@@ -407,9 +414,10 @@ class StrongestParser(Parser):
         self, 
         comp_id: str, 
         division_male: str, 
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
-        wo_df = self.get_workout_frame(comp_id=comp_id)
+        wo_df = self.get_workout_frame(comp_id=comp_id, refresh=refresh)
         wo_df['description'] = wo_df['description'].apply(
             lambda x: ''.join(str(p) for p in 
             BeautifulSoup(x, 'html.parser').find_all('p'))
@@ -461,8 +469,8 @@ class ScoreItParser(Parser):
     def __init__(self):
         super().__init__(manager=inventory.ScoreItInventoryManager)
 
-    def parse_metadata(self, comp_id):
-        data = self.manager.load_metadata(comp_id=comp_id)
+    def parse_metadata(self, comp_id, refresh: bool = False):
+        data = self.manager.load_metadata(comp_id=comp_id, refresh=refresh)
 
         event_loc = data['eventAddress']
         s = event_loc.split(' - ')
@@ -507,12 +515,14 @@ class ScoreItParser(Parser):
         self,
         comp_id: str,
         division_male: str,
-        division_female: str    
+        division_female: str,    
+        refresh: bool = False
     ):
         df = super().get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
         df = pd.merge(
             df[['comp_id','div_id','gender']],
@@ -601,12 +611,14 @@ class ScoreItParser(Parser):
         self,
         comp_id: str,
         division_male: str,
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
         df = self.get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
 
         entrants_df = self.get_entrants_frame(df)
@@ -641,8 +653,8 @@ class CompetitionCornerParser(Parser):
     def __init__(self):
         super().__init__(manager=inventory.CompetitionCornerInventoryManager)
 
-    def parse_metadata(self, comp_id):
-        data = self.manager.load_metadata(comp_id=comp_id)
+    def parse_metadata(self, comp_id, refresh: bool = False):
+        data = self.manager.load_metadata(comp_id=comp_id, refresh=refresh)
 
         virtual = data['locationType'] != 'onsite'
         location = data.get('location')
@@ -693,12 +705,14 @@ class CompetitionCornerParser(Parser):
         self,
         comp_id: str,
         division_male: str,
-        division_female: str    
+        division_female: str,
+        refresh: bool = False
     ):
         df = super().get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
         df = pd.merge(
             df[['comp_id','div_id','gender']],
@@ -812,12 +826,14 @@ class CompetitionCornerParser(Parser):
         self,
         comp_id: str,
         division_male: str,
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
         df = self.get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
 
         entrants_df = self.get_entrants_frame(df)
@@ -852,7 +868,8 @@ class CompetitionCornerParser(Parser):
         self,
         comp_id: int,
         division_male: str,
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
 
         wo_list = [
@@ -863,7 +880,8 @@ class CompetitionCornerParser(Parser):
             for div_id in [division_male, division_female]
             for d in self.manager.load_workouts(
                 comp_id=comp_id,
-                div_id=div_id
+                div_id=div_id,
+                refresh=refresh
             )
         ]
 
@@ -907,12 +925,14 @@ class CompetitionCornerParser(Parser):
         self,
         comp_id: int,
         division_male: str,
-        division_female: str
+        division_female: str,
+        refresh: bool = False
     ):
         sch_df, desc_df = self.get_workout_frames(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
 
         ## the description frame has the date and the schdule has the time
@@ -1005,15 +1025,18 @@ class CrossFitParser(Parser):
         self,
         **kwargs
     ):
-        data = self.manager.load_leaderboard_page(**kwargs,page=1)
+        data = self.manager.load_leaderboard_page(
+            **kwargs,page=1)
         return data['pagination']['totalPages']
 
     def get_leaderboard_page_frame(
         self, 
         page: int = 1,
+        refresh: bool = False,
         **kwargs
     ):
-        data = self.manager.load_leaderboard_page(**kwargs, page=page)
+        data = self.manager.load_leaderboard_page(
+            **kwargs, page=page, refresh=refresh)
         comp = data['competition']
         df = pd.DataFrame(data['leaderboardRows'])\
             .rename(columns={
@@ -1033,6 +1056,15 @@ class CrossFitParser(Parser):
             'competitorName':'display_name'
         })
         df['overall_rank'] = pd.to_numeric(df['overall_rank'],errors='coerce')
+
+        ## some leaderboards are copied from another source, so they didn't bother
+        ## to link up the athletes with CF IDs. In that case, we'll generate one.
+        if not 'source_athlete_id' in df.columns:
+            df['source_athlete_id'] = \
+                'C' + df['source_comp_id'] + '-' + \
+                df['gender'] + '-' + \
+                pd.util.hash_pandas_object(df['display_name']).astype(str) + \
+                '-' + str(page)
         
         return df
 
@@ -1043,7 +1075,8 @@ class CrossFitParser(Parser):
             'source_comp_id','gender','source_athlete_id',
             'display_name','overall_rank','overall_points','status'
         ])
-        entrants_df['dq'] = entrants_df['status']\
+
+        entrants_df['dq'] = entrants_df['status'].astype(str)\
                 .str.contains('DQ',case=False).fillna(False)
         if entrants_df['overall_points'].str.contains(':').all():
             entrants_df['overall_points'] = entrants_df['overall_points']\
@@ -1092,13 +1125,12 @@ class CrossFitParser(Parser):
             'rank','points'
         ])
 
-
         return scores_df
 
     def parse_leaderboard_page(
-        self, page: int = 1, **kwargs
+        self, page: int = 1, refresh: bool = False, **kwargs
     ):
-        df = self.get_leaderboard_page_frame(**kwargs,page=page)
+        df = self.get_leaderboard_page_frame(**kwargs,page=page,refresh=refresh)
         entrants_df = self.get_entrants_frame(df)
         scores_df = self.get_scores_frame(df)
 
