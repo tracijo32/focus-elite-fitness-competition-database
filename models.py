@@ -6,7 +6,7 @@ def convert_date_to_string(v: str | datetime | date | None) -> str | None:
         return v.strftime('%Y-%m-%d')
     elif isinstance(v, str):
         try:
-            return datetime.strptime(v, '%Y-%m-%d')\
+            return datetime.strptime(v.split('T')[0], '%Y-%m-%d')\
                 .strftime('%Y-%m-%d')
         except ValueError:
             raise ValueError(f"Invalid date format: {v}")
@@ -48,13 +48,17 @@ class Score(BaseModel):
 class Metadata(BaseModel):
     source_comp_id: str
     title: str
-    start_date: datetime
-    end_date: datetime
+    start_date: str
+    end_date: str
     venue_name: str | None = None
     address: str | None = None
     lat: float | None = None
     lng: float | None = None
     virtual: bool
+
+    @field_validator('start_date', 'end_date',mode='before')
+    def validate_date(cls, v):
+        return convert_date_to_string(v)
 
 class Workout(BaseModel):
     source_comp_id: str
