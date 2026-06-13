@@ -15,6 +15,7 @@ SOURCES = [
     'competition-corner',
     'strongest',
     'score-it',
+    'local-comp',
     'manual'
 ]
 
@@ -65,7 +66,7 @@ def _create_external_table_from_model(
 
     return table
 
-def create_entrant_external_table():
+def create_entrants_external_table():
     return _create_external_table_from_model( 
         model = m.Entrant, 
         model_name = 'entrants',
@@ -226,6 +227,7 @@ def create_athletes_master_external_table():
         bigquery.SchemaField('cc_id', 'STRING', 'REPEATED'),
         bigquery.SchemaField('str_id', 'STRING', 'REPEATED'),
         bigquery.SchemaField('mn_id', 'STRING', 'REPEATED'),
+        bigquery.SchemaField('lc_id', 'STRING', 'REPEATED'),
         bigquery.SchemaField('is_not', 'INTEGER', 'REPEATED')
     ]
     table = bigquery.Table(f'{gcp_params.project_id}.staging.athletes_master')
@@ -244,6 +246,34 @@ def _create_view(view_name: str, sql: str, dataset: str = "dev"):
     CLIENT.delete_table(view_id, not_found_ok=True)
     CLIENT.create_table(view)
     return view
+
+def _create_table(table_name: str, sql: str, dataset: str = "dev"):
+    table_id = f"{CLIENT.project}.{dataset}.{table_name}"
+    query = f"CREATE OR REPLACE TABLE `{table_id}` AS {sql}"
+    CLIENT.query(query).result()
+    return CLIENT.get_table(table_id)
+
+def _write_table_from_json(
+    table_name: str,
+    rows: Union[dict, list[dict]],
+    schema: list[bigquery.SchemaField] | None = None,
+    dataset: str = "dev",
+):
+    if isinstance(rows, dict):
+        rows = [rows]
+    table_id = f"{CLIENT.project}.{dataset}.{table_name}"
+    job_config = bigquery.LoadJobConfig(
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+    )
+    if schema:
+        job_config.schema = schema
+    else:
+        job_config.autodetect = True
+    job = CLIENT.load_table_from_json(rows, table_id, job_config=job_config)
+    job.result()
+    if job.errors:
+        raise RuntimeError(f"BigQuery load_table_from_json errors: {job.errors}")
+    return CLIENT.get_table(table_id)
 
 def create_athletes_source_id_view():
     source_map = {
@@ -267,7 +297,7 @@ def create_athletes_source_id_view():
     view_name = 'athlete_source_id'
     return _create_view(view_name, query, 'dev')
 
-def create_source_to_global_entrants_view():
+def create_source_to_global_entrants_table():
     query = """
     WITH comps AS (
         SELECT global_comp_id, source, source_comp_id
@@ -321,25 +351,17 @@ def create_source_to_global_entrants_view():
         a.global_athlete_id,
         e.source_athlete_id,
         e.overall_rank,
-        CASE
-        WHEN e.overall_points IS NULL THEN NULL
-        WHEN e.global_comp_id = 'games-2008' THEN FORMAT(
-            '%02d:%02d',
-            DIV(CAST(TRUNC(e.overall_points) AS INT64), 60),
-            MOD(CAST(TRUNC(e.overall_points) AS INT64), 60)
-        )
-        ELSE CAST(CAST(TRUNC(e.overall_points) AS INT64) AS STRING)
-        END AS overall_points,
+        e.overall_points,
         e.dq
     FROM entrants e
     LEFT JOIN `dev.athlete_source_id` a
     ON e.source = a.source
     AND e.source_athlete_id = a.source_athlete_id
     """
-    view_name = 'source_to_global_entrants'
-    return _create_view(view_name, query, 'dev')
+    table_name = 'source_to_global_entrants'
+    return _create_table(table_name, query, 'dev')
 
-def create_source_to_global_workouts_view():
+def create_source_to_global_workouts_table():
     query = """
     SELECT
     c.global_comp_id, c.source, w.*,
@@ -352,16 +374,16 @@ def create_source_to_global_workouts_view():
     AND NOT (c.global_comp_id = 'games-2020-stage1' AND seq > 8) 
     AND NOT (c.global_comp_id = 'games-2020-finals' AND seq < 8)
     """
-    view_name = 'source_to_global_workouts'
-    return _create_view(view_name, query, 'dev')
+    table_name = 'source_to_global_workouts'
+    return _create_table(table_name, query, 'dev')
 
-def create_source_to_global_scores_view():
+def create_source_to_global_scores_table():
     query = """
     SELECT 
         w.global_comp_id, w.source, w.source_comp_id, w.source_workout_id, w.global_workout_id,
         e.source_athlete_id, e.global_entrant_id,
         s.gender, s.score_display, s.tiebreak_display, s.rank, s.points
-    FROM `dev.source_to_global_workout` w
+    FROM `dev.source_to_global_workouts` w
     JOIN `staging.scores` s
     ON w.source = SPLIT(s._FILE_NAME, '/')[SAFE_OFFSET(3)]
     AND w.source_comp_id = s.source_comp_id
@@ -371,10 +393,96 @@ def create_source_to_global_scores_view():
     AND s.source_comp_id = e.source_comp_id
     AND s.source_athlete_id = e.source_athlete_id
     """
-    view_name = 'source_to_global_scores'
-    return _create_view(view_name, query, 'dev')
+    table_name = 'source_to_global_scores'
+    return _create_table(table_name, query, 'dev')
 
+def create_api_entrants_view():
+    query = """
+    SELECT 
+        s2g.global_comp_id,
+        s2g.gender,
+        s2g.global_entrant_id,
+        s2g.global_athlete_id,
+        s2g.display_name,
+        s2g.overall_rank,
+        CASE WHEN conf.score_type = 'time' THEN 
+        FORMAT(
+            '%02d:%02d',
+            DIV(CAST(TRUNC(s2g.overall_points) AS INT64), 60),
+            MOD(CAST(TRUNC(s2g.overall_points) AS INT64), 60)
+        )
+        WHEN conf.score_type = 'integer' THEN 
+        CAST(TRUNC(s2g.overall_points) AS STRING)
+        ELSE CAST(s2g.overall_points AS STRING)
+        END AS overall_points
+    FROM `dev.source_to_global_entrants` s2g
+    JOIN `dev.leaderboard_config` conf
+    ON s2g.global_comp_id = conf.global_comp_id
+    """
+    return _create_view('api_entrants', query, 'dev')
+
+def create_source_leaderboard_url_view():
+    replacements = {' ':'%20', '(': '%28', ')': '%29'}
+    rep_str = "COALESCE(m.title, '')"
+    for k,v in replacements.items():
+        rep_str = f"REPLACE({rep_str}, '{k}', '{v}')"
+
+    query = f"""
+    SELECT 
+        s.global_comp_id, s.source, s.source_comp_id,
+        CASE 
+            WHEN s.source = 'competition-corner'
+            THEN CONCAT(
+                'https://competitioncorner.net/ff/',
+                s.source_comp_id,'/results'
+            )
+            WHEN s.source = 'local-comp' 
+            THEN CONCAT(
+                'https://local-comp.com/controller/event/leaderboard?eventId=',
+                s.source_comp_id
+            )
+            WHEN s.source = 'strongest' AND s.source_comp_id LIKE 'ri20%'
+            THEN 'https://roguefitness.com/invitational/leaderboard'
+            WHEN s.source = 'strongest'
+            THEN CONCAT(
+                'https://compete.strongest.com/competitions/',
+                s.source_comp_id,'/leaderboard'
+            )
+            WHEN s.source = 'crossfit' AND c.stage IN ('open','games')
+            THEN CONCAT(
+                'https://games.crossfit.com/leaderboard/',
+                c.stage, '/', c.season
+            )
+            WHEN s.source = 'crossfit'
+            THEN CONCAT(
+                'https://games.crossfit.com/leaderboard/',
+                c.stage, 's/', c.season, '?', c.stage, '=', s.source_comp_id
+            )
+            WHEN s.source = 'score-it'
+            THEN CONCAT(
+                'https://scoreit.co.za/leaderboard/',
+                s.source_comp_id, '/',
+                {rep_str}
+            )
+            ELSE NULL
+        END AS leaderboard_url
+    FROM `staging.sources` AS s
+    LEFT JOIN `staging.crossfit_stages` AS c
+    ON s.global_comp_id = c.global_comp_id
+    AND s.source = 'crossfit'
+    AND CAST(s.source_comp_id AS STRING) = CAST(c.comp_id AS STRING)
+    LEFT JOIN `staging.metadata` m 
+    ON s.source = SPLIT(m._FILE_NAME, '/')[SAFE_OFFSET(3)]
+    AND s.source_comp_id = m.source_comp_id
+    """
+    return _create_view('source_leaderboard_url', query, 'dev')
 
 if __name__ == '__main__':
-    #create_source_to_global_workouts_view()
-    create_sources_external_table()
+    pass
+    #create_source_to_global_entrants_table()
+    #create_source_to_global_workouts_table()
+    #create_source_to_global_scores_table()
+    # create_metadata_external_table()
+    # create_entrants_external_table()
+    # create_sources_external_table()
+    # create_workouts_external_table()
