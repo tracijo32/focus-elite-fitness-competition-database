@@ -1,5 +1,6 @@
 from pydantic import BaseModel, field_validator
 from datetime import datetime, date
+from pycountry import countries
 
 def convert_date_to_string(v: str | datetime | date | None) -> str | None:
     if isinstance(v, datetime) or isinstance(v, date):
@@ -31,9 +32,23 @@ class Entrant(BaseModel):
     gender: str
     display_name: str
     source_athlete_id: str
+    source_division_id: str | None = None
+    home_gym: str | None = None
+    country_code: str | None = None
     overall_rank: int | None = None
     overall_points: float | None = None
     dq: bool = False
+    wd: bool = False
+    dnf: bool = False
+
+    @field_validator('country_code', mode='before')
+    def validate_country_code(cls, v):
+        if v is None:
+            return None
+        try:
+            return countries.get(alpha_3=v).alpha_3
+        except ValueError:
+            raise ValueError(f"Invalid country code: {v}")
 
 class Score(BaseModel):
     source_comp_id: str
@@ -44,6 +59,7 @@ class Score(BaseModel):
     tiebreak_display: str | None = None
     rank: int | None = None
     points: float | None = None
+    source_division_id: str | None = None
 
 class Metadata(BaseModel):
     source_comp_id: str
@@ -85,8 +101,6 @@ class Source(BaseModel):
     source_comp_id: str
     division_male: str
     division_female: str
-    leaderboard_url: str | None = None
-    notes: str | None = None
 
 class CrossFitEntrant(BaseModel):
     cf_id: int
