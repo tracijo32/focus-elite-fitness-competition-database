@@ -6,6 +6,29 @@ from util import convert_value_to_display
 from parameters import GoogleCloudParameters
 from geopy.geocoders import GoogleV3
 from bs4 import BeautifulSoup
+from pycountry import countries
+
+def get_country_code(type: str, value: str | None):
+    if value is None:
+        return None
+
+    if type == 'alpha_3':
+        try:
+            return countries.get(alpha_3=value).alpha_3
+        except:
+            return None
+    elif type == 'alpha_2':
+        try:
+            return countries.get(alpha_2=value).alpha_3
+        except:
+            return None
+    elif type == 'name':
+        try:
+            return countries.get(name=value).alpha_3
+        except:
+            return None
+    else:
+        raise ValueError(f"Invalid type: {type}")
 
 class Parser:
     def __init__(self, manager: inventory.InventoryManager):
@@ -51,6 +74,68 @@ class Parser:
         ]
         df = pd.DataFrame([p for page in lb for p in page])
         return df
+    
+    def dump_metadata(self, metadata: Metadata, comp_id: str):
+        blob_name = self.build_parsed_blob_name(
+            model_name='metadata',comp_id=comp_id)
+        self.save_model_to_ndjson(
+            models=[metadata],
+            blob_name=blob_name
+        )
+        return
+
+    def dump_frame(
+        self, 
+        df: pd.DataFrame, 
+        model_name: str,
+        model: BaseModel,
+        **kwargs
+    ):
+        ## convert the entrants to pydantic models
+        models = [
+            model(**row.dropna().to_dict()) 
+            for _, row in df.iterrows()
+        ]
+        blob_name = self.build_parsed_blob_name(
+            model_name=model_name,**kwargs)
+        self.save_model_to_ndjson(
+            models=models,
+            blob_name=blob_name
+        )
+        return
+
+    def dump_entrants_frame(
+        self, entrants_df: pd.DataFrame, **kwargs
+    ):
+        self.dump_frame(
+            df=entrants_df,
+            model_name='entrants',
+            model=Entrant,
+            **kwargs
+        )
+        return
+    
+    def dump_scores_frame(
+        self, scores_df: pd.DataFrame, **kwargs
+    ):
+        self.dump_frame(
+            df=scores_df,
+            model_name='scores',
+            model=Score,
+            **kwargs
+        )
+        return
+
+    def dump_workouts_frame(
+        self, workouts_df: pd.DataFrame, **kwargs
+    ):
+        self.dump_frame(
+            df=workouts_df,
+            model_name='workouts',
+            model=Workout,
+            **kwargs
+        )
+        return
 
 class StrongestParser(Parser):
     def __init__(self):
@@ -144,20 +229,34 @@ class StrongestParser(Parser):
         ## create a dataframe of the entrants
         ## has entrant name, overall rank, and overall points
         entrants_df = pd.merge(
-            df[['comp_id','gender']],
+            df[['comp_id','gender','div_id']],
             df['body_rows'].apply(lambda x: x[0]).apply(pd.Series),
             left_index=True,
             right_index=True
+        ).explode('teamProfiles', ignore_index=True)
+
+        entrants_df = pd.merge(
+            entrants_df.drop(columns=['teamProfiles']),
+            entrants_df['teamProfiles'].apply(pd.Series)[['country']],
+            left_index=True,
+            right_index=True
         ).reindex(
-            columns = ['comp_id','gender','competitor_name',
-            'overall','registrationId','cum_workout_rank'])\
-        .rename(columns={
+            columns=['comp_id','div_id','gender',
+            'competitor_name','gym','country',
+            'overall','registrationId','cum_workout_rank']
+        ).rename(columns={
             'overall': 'overall_rank',
             'cum_workout_rank': 'overall_points',
             'comp_id': 'source_comp_id',
+            'div_id': 'source_division_id',
             'registrationId': 'source_athlete_id',
-            'competitor_name': 'display_name'
+            'competitor_name': 'display_name',
+            'country': 'country_code',
+            'gym': 'home_gym'
         })
+        entrants_df['country_code'] = entrants_df['country_code'].apply(
+            lambda x: get_country_code('alpha_2', x)
+        )
 
         entrants_df['overall_rank'] = entrants_df['overall_rank'].str.extract(r'(\d+)')\
             .apply(pd.to_numeric, errors='coerce')
@@ -190,8 +289,7 @@ class StrongestParser(Parser):
         ).explode('body_rows',ignore_index=True)
 
         scores_df = pd.merge(
-            scores_df[['comp_id','gender','source_athlete_id',
-            'div_id']],
+            scores_df[['comp_id','gender','source_athlete_id','div_id']],
             scores_df['body_rows'].apply(pd.Series),
             left_index=True,
             right_index=True
@@ -308,8 +406,11 @@ class StrongestParser(Parser):
             'games_points'
         ] = 0
 
-        scores_df = scores_df.rename(columns=
-        {'comp_id':'source_comp_id','workout_id':'source_workout_id'})
+        scores_df = scores_df.rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id',
+            'workout_id':'source_workout_id'
+        })
 
         ## compute the total points for each entrant
         e_pts = entrants_df[['source_comp_id','gender','source_athlete_id','overall_points']]
@@ -345,7 +446,7 @@ class StrongestParser(Parser):
         scores_df = scores_df.reindex(
             columns = ['source_comp_id','gender','source_workout_id',
             'source_athlete_id','points','rank','score_display',
-            'tiebreak_display']
+            'source_division_id','tiebreak_display']
         )
 
         return entrants_df, scores_df
@@ -353,32 +454,9 @@ class StrongestParser(Parser):
     def parse_leaderboard(
         self, refresh: bool = False, **kwargs
     ):
-
         entrants_df, scores_df = self.get_entrants_and_scores_frame(refresh=refresh, **kwargs)
-
-        ## convert the entrants and scores to pydantic models
-        entrants = [
-            Entrant(**row.dropna().to_dict()) 
-            for _, row in entrants_df.iterrows()
-        ]
-        scores = [
-            Score(**row.dropna().to_dict())
-            for _, row in scores_df.iterrows()
-        ]
-
-        ## upload the models to the inventory
-        blob_name_entrants = self.build_parsed_blob_name(
-            model_name='entrants',**kwargs)
-        self.save_model_to_ndjson(
-            models=entrants,
-            blob_name=blob_name_entrants
-        )
-        blob_name_scores = self.build_parsed_blob_name(
-            model_name='scores',**kwargs)
-        self.save_model_to_ndjson(
-            models=scores,
-            blob_name=blob_name_scores
-        )
+        self.dump_entrants_frame(entrants_df, **kwargs)
+        self.dump_scores_frame(scores_df, **kwargs)
         return
 
     def parse_metadata(self, comp_id: str, refresh: bool = False):
@@ -401,13 +479,7 @@ class StrongestParser(Parser):
             kwargs['lat'] = data['place']['lat']
             kwargs['lng'] = data['place']['lng']
 
-        meta = [Metadata(**kwargs)]
-        blob_name = self.build_parsed_blob_name(
-            model_name='metadata',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=meta,
-            blob_name=blob_name
-        )
+        self.dump_metadata(Metadata(**kwargs), comp_id=comp_id)
         return
 
     def parse_workouts(
@@ -453,16 +525,7 @@ class StrongestParser(Parser):
                     'workout_id': 'source_workout_id'
                 })
 
-        workouts = [
-            Workout(**row.dropna().to_dict())
-            for _, row in df.iterrows()
-        ]
-        blob_name = self.build_parsed_blob_name(
-            model_name='workouts',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=workouts,
-            blob_name=blob_name
-        )
+        self.dump_workouts_frame(df, comp_id=comp_id)
         return
 
 class ScoreItParser(Parser):
@@ -502,13 +565,7 @@ class ScoreItParser(Parser):
             'virtual': False
         }
 
-        meta = [Metadata(**kwargs)]
-        blob_name = self.build_parsed_blob_name(
-            model_name='metadata',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=meta,
-            blob_name=blob_name
-        )
+        self.dump_metadata(Metadata(**kwargs), comp_id=comp_id)
         return
 
     def get_leaderboard_frame(
@@ -692,13 +749,7 @@ class CompetitionCornerParser(Parser):
             kwargs['lng'] = lng
             kwargs['address'] = addr
 
-        meta = [Metadata(**kwargs)]
-        blob_name = self.build_parsed_blob_name(
-            model_name='metadata',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=meta,
-            blob_name=blob_name
-        )
+        self.dump_metadata(Metadata(**kwargs), comp_id=comp_id)
         return
 
     def get_leaderboard_frame(
@@ -729,38 +780,59 @@ class CompetitionCornerParser(Parser):
         ).rename(
             columns = {
                 'comp_id': 'source_comp_id',
-                'name': 'display_name',
-                'place': 'overall_rank',
-                'totalPoints': 'overall_points',
+                'div_id': 'source_division_id',
                 'rosterID': 'source_athlete_id',
-                'isDisqualified': 'dq'
             }
-        )
-
+        ).astype({
+            'source_comp_id':str,
+            'source_division_id':str,
+            'source_athlete_id':str
+        })
         return df
 
     def get_entrants_frame(self,df: pd.DataFrame):
         ## parse out the entrant data
-        entrants_df = df.reindex(columns=[
-            'source_comp_id','display_name','gender',
-            'overall_rank','overall_points',
-            'source_athlete_id','dq'
-        ]).astype({
-            'source_comp_id':str,
-            'source_athlete_id':str,
-            'gender':str,
-            'display_name':str
+        entrants_df = df.rename(columns={
+            'name': 'display_name',
+            'place': 'overall_rank',
+            'totalPoints': 'overall_points',
+            'isDisqualified': 'dq',
+            'affiliate': 'home_gym'
         })
-        entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
+
+        cc1 = entrants_df['countryCode'].apply(
+            lambda x: get_country_code('alpha_3', x)
+        )
+        cc2 = entrants_df['countryShortCode'].apply(
+            lambda x: get_country_code('alpha_2', x)
+        )
+        cc3 = entrants_df['countryName'].apply(
+            lambda x: get_country_code('name', x)
+        )
+
+        entrants_df['country_code'] = cc1.fillna(cc2).fillna(cc3)
+
+
+        entrants_df = entrants_df.reindex(
+            columns = [
+                'source_comp_id','source_division_id','gender',
+                'source_athlete_id','display_name',
+                'overall_rank','overall_points',
+                'dq','wd','dnf',
+                'country_code','home_gym'
+            ]
+        )
+
         entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
-        entrants_df['dq'] = entrants_df['dq'].fillna(False).astype(bool)
+        entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
 
         return entrants_df
 
     def get_scores_frame(self,df: pd.DataFrame):
         ## merge entrant data with the workout scores
         scores_df = pd.merge(
-            df[['source_comp_id','source_athlete_id','gender']],
+            df[['source_comp_id','source_division_id',
+            'source_athlete_id','gender']],
             df['workoutScores'].apply(lambda x: list(x.values())),
             left_index=True,
             right_index=True
@@ -810,10 +882,14 @@ class CompetitionCornerParser(Parser):
         scores_df['score_display'] = scores_df['score_display'].str.strip()
 
         scores_df = scores_df.reindex(
-            columns=['source_comp_id','source_athlete_id','gender',
-            'source_workout_id','score_display','tiebreaker','rank','points']
+            columns=[
+                'source_comp_id','source_athlete_id',
+                'gender','source_division_id','source_workout_id',
+                'score_display','tiebreaker_display',
+                'rank','points']
         ).astype({
             'source_comp_id':str,
+            'source_division_id':str,
             'source_athlete_id':str,
             'source_workout_id':str,
         })
@@ -839,29 +915,8 @@ class CompetitionCornerParser(Parser):
         entrants_df = self.get_entrants_frame(df)
         scores_df = self.get_scores_frame(df)
 
-        ## convert the entrants and scores to pydantic models
-        entrants = [
-            Entrant(**row.dropna().to_dict()) 
-            for _, row in entrants_df.iterrows()
-        ]
-        scores = [
-            Score(**row.dropna().to_dict())
-            for _, row in scores_df.iterrows()
-        ]
-
-        ## upload the models to the inventory
-        blob_name_entrants = self.build_parsed_blob_name(
-            model_name='entrants',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=entrants,
-            blob_name=blob_name_entrants
-        )
-        blob_name_scores = self.build_parsed_blob_name(
-            model_name='scores',comp_id=comp_id)
-        self.save_model_to_ndjson(
-            models=scores,
-            blob_name=blob_name_scores
-        )
+        self.dump_entrants_frame(entrants_df,comp_id=comp_id)
+        self.dump_scores_frame(scores_df,comp_id=comp_id)
         return
 
     def get_workout_frames(
@@ -995,16 +1050,7 @@ class CompetitionCornerParser(Parser):
         df['source_workout_id'] = df['source_workout_id'].astype(str)
         df['seq'] = df.index + 1
 
-        blob_name_workouts = self.build_parsed_blob_name(
-            model_name='workouts',comp_id=comp_id)
-        workouts = [
-            Workout(**row.dropna().to_dict())
-            for _, row in df.iterrows()
-        ]
-        self.save_model_to_ndjson(
-            models=workouts,
-            blob_name=blob_name_workouts
-        )
+        self.dump_workouts_frame(df,comp_id=comp_id)
         return
 
 class CrossFitParser(Parser):
