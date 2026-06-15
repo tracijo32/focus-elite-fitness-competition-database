@@ -604,6 +604,7 @@ class ScoreItParser(Parser):
         df = df.rename(
             columns={
                 'comp_id':'source_comp_id',
+                'div_id':'source_division_id',
                 'teamName':'display_name',
                 'teamRef': 'source_athlete_id',
                 'totalPoints': 'overall_points',
@@ -616,7 +617,8 @@ class ScoreItParser(Parser):
     def get_entrants_frame(self,df: pd.DataFrame):
         ## parse entrants
         entrants_df = df.reindex(
-            columns=['source_comp_id','gender','source_athlete_id',
+            columns=['source_comp_id','gender',
+            'source_athlete_id','source_division_id',
             'display_name','overall_points','overall_rank']
         )
         entrants_df['dq'] = False
@@ -624,7 +626,8 @@ class ScoreItParser(Parser):
 
     def get_scores_frame(self,df: pd.DataFrame):
         scores_df = pd.merge(
-            df[['source_comp_id','gender','source_athlete_id']],
+            df[['source_comp_id','gender',
+            'source_athlete_id','source_division_id']],
             df['leaderboardColumnValues'],
             left_index=True,
             right_index=True
@@ -659,7 +662,8 @@ class ScoreItParser(Parser):
             .fillna(scores_df['score_display_weight'])
 
         scores_df = scores_df.reindex(columns=[
-            'source_comp_id','gender','source_athlete_id','source_workout_id',
+            'source_comp_id','gender','source_athlete_id',
+            'source_division_id','source_workout_id',
             'score_display','tiebreak_display','rank','points'
         ])
         return scores_df
