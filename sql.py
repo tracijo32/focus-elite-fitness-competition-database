@@ -1,6 +1,6 @@
 from google.cloud import bigquery
 from datetime import datetime
-from typing import Union, get_args
+from typing import get_args, get_origin
 
 from google.cloud.storage.client import Client
 from pydantic import BaseModel
@@ -30,9 +30,10 @@ def _create_external_table_from_model(
 
     schema = []
     for fn, field in model.model_fields.items():
-        if isinstance(field.annotation, Union):
-            t = [a for a in get_args(field.annotation) 
-                    if a is not type(None)][0]
+        origin = get_origin(field.annotation)
+        if origin is not None:
+            t = [a for a in get_args(field.annotation)
+                 if a is not type(None)][0]
         elif isinstance(field.annotation, type):
             t = field.annotation
         else:
@@ -56,6 +57,7 @@ def _create_external_table_from_model(
 
     ext_conf.schema = schema
     ext_conf.source_uris = source_uris
+    ext_conf.ignore_unknown_values = True
 
     full_table_id = f'{gcp_params.project_id}.{dataset_name}.{model_name}'
     table = bigquery.Table(full_table_id)
@@ -66,36 +68,108 @@ def _create_external_table_from_model(
 
     return table
 
+def _create_view(view_name: str, sql: str, dataset: str = "dev"):
+    view_id = f"{CLIENT.project}.{dataset}.{view_name}"
+    view = bigquery.Table(view_id)
+    view.view_query = sql
+    CLIENT.delete_table(view_id, not_found_ok=True)
+    CLIENT.create_table(view)
+    return view
+
+def _create_table(table_name: str, sql: str, dataset: str = "dev"):
+    table_id = f"{CLIENT.project}.{dataset}.{table_name}"
+    query = f"CREATE OR REPLACE TABLE `{table_id}` AS {sql}"
+    CLIENT.query(query).result()
+    return CLIENT.get_table(table_id)
+
+###----------------------------------------------------------------------------
+### external tables and views in staging
+
 def create_entrants_external_table():
     return _create_external_table_from_model( 
         model = m.Entrant, 
-        model_name = 'entrants',
+        model_name = 'entrants_raw',
         source_uris = [
             f'gs://{BUCKET_NAME}/{source}/parsed/*/entrants.ndjson'
             for source in SOURCES
         ]
     )
 
+def create_entrants_view():
+    view_query = """
+    SELECT SPLIT(_FILE_NAME, '/')[SAFE_OFFSET(3)] AS source, * 
+    FROM `staging.entrants_raw`
+    """
+    return _create_view(
+        view_name = 'entrants',
+        sql = view_query,
+        dataset = 'staging'
+    )
+
 def create_scores_external_table():
     return _create_external_table_from_model( 
         model = m.Score, 
-        model_name = 'scores',
+        model_name = 'scores_raw',
         source_uris = [
             f'gs://{BUCKET_NAME}/{source}/parsed/*/scores.ndjson'
             for source in SOURCES
         ]
     )
 
+def create_scores_view():
+    view_query = """
+    SELECT SPLIT(_FILE_NAME, '/')[SAFE_OFFSET(3)] AS source, * 
+    FROM `staging.scores_raw`
+    """
+    return _create_view(
+        view_name = 'scores',
+        sql = view_query,
+        dataset = 'staging'
+    )
+
 def create_metadata_external_table():
     return _create_external_table_from_model(
         model = m.Metadata, 
-        model_name = 'metadata',
+        model_name = 'metadata_raw',
         source_uris = [
             f'gs://{BUCKET_NAME}/{source}/parsed/*/metadata.ndjson'
             for source in SOURCES if source != 'crossfit'
         ] + [
             f'gs://{BUCKET_NAME}/crossfit/metadata.ndjson'
         ]
+    )
+def create_metadata_view():
+    view_query = """
+    SELECT SPLIT(_FILE_NAME, '/')[SAFE_OFFSET(3)] AS source, * 
+    FROM `staging.metadata_raw`
+    """
+    return _create_view(
+        view_name = 'metadata',
+        sql = view_query,
+        dataset = 'staging'
+    )
+
+def create_workouts_external_table():
+    return _create_external_table_from_model(
+        model = m.Workout,
+        model_name = 'workouts_raw',
+        source_uris = [
+            f'gs://{BUCKET_NAME}/{source}/parsed/*/workouts.ndjson'
+            for source in SOURCES if source != 'crossfit'
+        ] + [
+            f'gs://{BUCKET_NAME}/crossfit/parsed/workouts.ndjson'
+        ]
+    )
+
+def create_workouts_view():
+    view_query = """
+    SELECT SPLIT(_FILE_NAME, '/')[SAFE_OFFSET(3)] AS source, * 
+    FROM `staging.workouts`
+    """
+    return _create_view(
+        view_name = 'workouts_raw',
+        sql = view_query,
+        dataset = 'staging'
     )
 
 def create_crossfit_stages_external_table():
@@ -112,19 +186,7 @@ def create_sources_external_table():
         source_uris = [f'gs://{BUCKET_NAME}/consolidated/sources.ndjson']
     )
 
-def create_workouts_external_table():
-    return _create_external_table_from_model(
-        model = m.Workout,
-        model_name = 'workouts',
-        source_uris = [
-            f'gs://{BUCKET_NAME}/{source}/parsed/*/workouts.ndjson'
-            for source in SOURCES if source != 'crossfit'
-        ] + [
-            f'gs://{BUCKET_NAME}/crossfit/parsed/workouts.ndjson'
-        ]
-    )
-
-def create_athlete_external_table():
+def create_crossfit_athletes_external_table():
     bucket_prefix = f'gs://{gcp_params.bucket_name}'
 
     ext_conf = bigquery.ExternalConfig("PARQUET")
@@ -160,28 +222,6 @@ def create_athlete_external_table():
     ]
 
     table = bigquery.Table(f'{gcp_params.project_id}.staging.cf_athletes')
-    table.schema = schema
-    table.external_data_configuration = ext_conf
-
-    CLIENT.delete_table(table, not_found_ok=True)
-    CLIENT.create_table(table)
-
-    return table
-
-def create_competition_index_external_table():
-    ext_conf = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
-    ext_conf.source_uris = [f'gs://{BUCKET_NAME}/consolidated/competition-index.ndjson']
-
-    schema = [
-        bigquery.SchemaField('global_comp_id', 'STRING', 'REQUIRED'),
-        bigquery.SchemaField('title', 'STRING', 'REQUIRED'),
-        bigquery.SchemaField('year', 'INTEGER', 'REQUIRED'),
-        bigquery.SchemaField('source', 'STRING', 'REQUIRED'),
-        bigquery.SchemaField('source_comp_id', 'STRING', 'REQUIRED'),
-        bigquery.SchemaField('is_cf_stage', 'BOOLEAN', 'REQUIRED')
-    ]
-
-    table = bigquery.Table(f'{gcp_params.project_id}.staging.competition_index')
     table.schema = schema
     table.external_data_configuration = ext_conf
 
@@ -239,42 +279,6 @@ def create_athletes_master_external_table():
 
     return table
 
-def _create_view(view_name: str, sql: str, dataset: str = "dev"):
-    view_id = f"{CLIENT.project}.{dataset}.{view_name}"
-    view = bigquery.Table(view_id)
-    view.view_query = sql
-    CLIENT.delete_table(view_id, not_found_ok=True)
-    CLIENT.create_table(view)
-    return view
-
-def _create_table(table_name: str, sql: str, dataset: str = "dev"):
-    table_id = f"{CLIENT.project}.{dataset}.{table_name}"
-    query = f"CREATE OR REPLACE TABLE `{table_id}` AS {sql}"
-    CLIENT.query(query).result()
-    return CLIENT.get_table(table_id)
-
-def _write_table_from_json(
-    table_name: str,
-    rows: Union[dict, list[dict]],
-    schema: list[bigquery.SchemaField] | None = None,
-    dataset: str = "dev",
-):
-    if isinstance(rows, dict):
-        rows = [rows]
-    table_id = f"{CLIENT.project}.{dataset}.{table_name}"
-    job_config = bigquery.LoadJobConfig(
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-    )
-    if schema:
-        job_config.schema = schema
-    else:
-        job_config.autodetect = True
-    job = CLIENT.load_table_from_json(rows, table_id, job_config=job_config)
-    job.result()
-    if job.errors:
-        raise RuntimeError(f"BigQuery load_table_from_json errors: {job.errors}")
-    return CLIENT.get_table(table_id)
-
 def create_athletes_source_id_view():
     source_map = {
         'crossfit': 'cf_id',
@@ -297,6 +301,8 @@ def create_athletes_source_id_view():
     view_name = 'athlete_source_id'
     return _create_view(view_name, query, 'dev')
 
+###----------------------------------------------------------------------------
+### global mapped tables in dev
 def create_source_to_global_entrants_table():
     query = """
     WITH comps AS (
@@ -396,6 +402,8 @@ def create_source_to_global_scores_table():
     table_name = 'source_to_global_scores'
     return _create_table(table_name, query, 'dev')
 
+###----------------------------------------------------------------------------
+### api views in dev
 def create_api_entrants_view():
     query = """
     SELECT 
@@ -477,12 +485,43 @@ def create_source_leaderboard_url_view():
     """
     return _create_view('source_leaderboard_url', query, 'dev')
 
+###----------------------------------------------------------------------------
+## helper functions for mass execution
+def create_all_external_tables_and_views():
+    print('Creating entrants external table & view...')
+    create_entrants_external_table()
+    create_entrants_view()
+
+    print('Creating scores external table & view...')
+    create_scores_external_table()
+    create_scores_view()
+
+    print('Creating metadata external table & view...')
+    create_metadata_external_table()
+    create_metadata_view()
+
+    print('Creating workouts external table & view...')
+    create_workouts_external_table()
+    create_workouts_view()
+
+    print('Creating crossfit stages external table...')
+    create_crossfit_stages_external_table()
+
+    print('Creating sources external table...')
+    create_sources_external_table()
+
+    print('Creating crossfit athletes external table...')
+    create_crossfit_athletes_external_table()
+
+    print('Creating location overrides external table...')
+    create_location_overrides_external_table()
+
+    print('Creating athletes master external table')
+    print('& exploded source id view...')
+    create_athletes_master_external_table()
+    create_athletes_source_id_view()
+
+    print('Done.')
+
 if __name__ == '__main__':
-    pass
-    #create_source_to_global_entrants_table()
-    #create_source_to_global_workouts_table()
-    #create_source_to_global_scores_table()
-    # create_metadata_external_table()
-    # create_entrants_external_table()
-    # create_sources_external_table()
-    # create_workouts_external_table()
+    create_all_external_tables_and_views()
