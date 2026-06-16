@@ -1219,31 +1219,9 @@ class CrossFitParser(Parser):
         entrants_df = self.get_entrants_frame(df)
         scores_df = self.get_scores_frame(df)
 
-        ## create Entrant and Score pydantic models
-        entrants = [
-            Entrant(**row.dropna())
-            for _, row in entrants_df.iterrows()
-        ]
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
 
-        scores = [
-            Score(**row.dropna())
-            for _, row in scores_df.iterrows()
-        ]
-        
-        entrants_blob_name = self.build_parsed_blob_name(
-            model_name='entrants',**kwargs,page=page)
-        scores_blob_name = self.build_parsed_blob_name(
-            model_name='scores',**kwargs,page=page)
-
-        ## upload the models to the inventory
-        self.save_model_to_ndjson(
-            models=entrants,
-            blob_name=entrants_blob_name
-        )
-        self.save_model_to_ndjson(
-            models=scores,
-            blob_name=scores_blob_name
-        )
         return
 
 class LocalCompParser(Parser):
@@ -1345,30 +1323,8 @@ class LocalCompParser(Parser):
         entrants_df, scores_df = self.get_entrants_and_scores_frame(
             **kwargs
         )
-    
-        entrants = [
-            Entrant(**row.dropna().to_dict())
-            for _, row in entrants_df.iterrows()
-        ]
-
-        scores = [
-            Score(**row.dropna().to_dict())
-            for _, row in scores_df.iterrows()
-        ]
-    
-        blob_name_entrants = self.build_parsed_blob_name(
-            model_name='entrants',**kwargs)
-        self.save_model_to_ndjson(
-            models=entrants,
-            blob_name=blob_name_entrants
-        )
-    
-        blob_name_scores = self.build_parsed_blob_name(
-            model_name='scores',**kwargs)
-        self.save_model_to_ndjson(
-            models=scores,
-            blob_name=blob_name_scores
-        )
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
         return
 
 class Circle21Parser(Parser):
