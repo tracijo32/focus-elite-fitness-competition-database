@@ -55,14 +55,12 @@ def parse_standard_competition(
 def pull_competition():
     query = f"""
     SELECT 
-        s.global_comp_id, 
         s.source, 
-        s.source_comp_id,
+        s.source_comp_id as comp_id,
         s.division_male,
         s.division_female,
-        s.priority,
-        c.season,
-        c.stage
+        CAST(c.season AS INT64) AS year,
+        CASE WHEN c.stage = 'quarterfinal' THEN 'quarterfinalsindividual' ELSE c.stage END AS comp_type
     FROM `staging.sources` s
     LEFT JOIN `staging.crossfit_stages` c
     ON s.global_comp_id = c.global_comp_id
@@ -193,3 +191,58 @@ def parse_all_competitions(
 
     return results
 
+def parse_crossfit_stream_results(
+    comp_df: pd.DataFrame,
+    results_file: str = 'crossfit_parse_stream_results.json'
+):
+    parser = parse.CrossFitParser()
+    req_cols = ['source','comp_id','division_male','division_female','year','comp_type']
+    assert comp_df['source'].eq('crossfit').all(), 'Only CrossFit competitions are supported'
+    assert all(c in comp_df.columns for c in req_cols)
+    assert comp_df[req_cols].notna().all().all(), 'Missing required columns'
+
+    pull_df = pd.melt(
+        comp_df,
+        id_vars=['comp_id','year','comp_type'],
+        value_vars=['division_male','division_female'],
+        var_name='gender',
+        value_name='div_id'
+    ).drop(columns=['gender'])
+        
+    try:
+        results = pd.read_json(results_file)
+        exist = pd.merge(
+            pull_df,results,
+            on=['comp_id','div_id','comp_type','year'],
+            how='left',
+            indicator=True
+        )
+        pull_df = exist[exist['_merge'].eq('left_only')]\
+            .reindex(columns=pull_df.columns)
+        results = results.to_dict(orient='records')
+
+        print(f'{len(results)} results already exist')
+        print(f'{len(pull_df)} results to pull')
+    except FileNotFoundError:
+        results = []
+
+    for _, row in tqdm(pull_df.iterrows(), total=len(pull_df)):
+        kwargs = row.to_dict()
+        res = parse_crossfit_leaderboard(parser, **kwargs)
+        results.extend(res)
+        pd.DataFrame(results).to_json(results_file, orient='records')
+        
+    print('done')
+
+if __name__ == '__main__':
+    print('pulling competitions')
+    comp_df = pull_competition()
+
+    ## only crossfit competitions from 2025 and earlier, or open & qf in 2026
+    comp_df = comp_df.loc[comp_df['source'].eq('crossfit')]
+    comp_df = comp_df[
+        comp_df['year'].lt(2026) |
+        comp_df['comp_type'].eq('open') |
+        comp_df['comp_type'].str.contains('quarter')
+    ]
+    parse_crossfit_stream_results(comp_df)
