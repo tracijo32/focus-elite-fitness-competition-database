@@ -164,10 +164,10 @@ def create_workouts_external_table():
 def create_workouts_view():
     view_query = """
     SELECT SPLIT(_FILE_NAME, '/')[SAFE_OFFSET(3)] AS source, * 
-    FROM `staging.workouts`
+    FROM `staging.workouts_raw`
     """
     return _create_view(
-        view_name = 'workouts_raw',
+        view_name = 'workouts',
         sql = view_query,
         dataset = 'staging'
     )
