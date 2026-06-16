@@ -482,3 +482,39 @@ class LocalCompAPIRequestClient(APIRequestClient):
             'scores': scores
         }
         return output
+
+class RogueFitnessAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url='https://www.roguefitness.com'
+        )
+        self.headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Referer": "https://www.roguefitness.com/invitational/leaderboard",
+            "Origin": "https://www.roguefitness.com",
+        }
+    
+    def fetch_competitions(self):
+        url = '/svc_event/events'
+        return self._request_json(url, headers=self.headers)
+    
+    def fetch_metadata(self, comp_id: str):
+        url = f'/svc_event/events/{comp_id}'
+        return self._request_json(url, headers=self.headers)
+    
+    def fetch_leaderboard_page(self, comp_id: str, div_id: str, year: int | None = None, page: int = 1):
+        if year is None:
+            url = f'/svc_event/events/{comp_id}/divisions/{div_id}/leaderboard'
+        else:
+            url = f'/svc_event/events/{year}/{comp_id}/divisions/{div_id}/leaderboard'
+        params = {
+            'page': page,
+            'sortEventNumber': 1,
+            'sortType': 'over_rank',
+            'sortOrder': 'asc'
+        }
+        return self._request_json(url, headers=self.headers, params=params)
