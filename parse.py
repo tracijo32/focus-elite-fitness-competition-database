@@ -1370,3 +1370,30 @@ class LocalCompParser(Parser):
             blob_name=blob_name_scores
         )
         return
+
+class Circle21Parser(Parser):
+    def __init__(self):
+        super().__init__(manager=inventory.Circle21InventoryManager)
+        gcp_params = GoogleCloudParameters()
+        self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
+
+    def parse_metadata(self, comp_id: str):
+        data = self.manager.load_metadata(comp_id=comp_id)
+        
+        meta = {
+            'source_comp_id': comp_id, 
+            'title': data['name'],
+            'start_date': data['date_from'],
+            'end_date': data['date_to'],
+            'virtual': not bool(data['onsite'])
+        }
+        
+        place_id = data.get('location')
+        if place_id:
+            loc = self.geolocator.geocode(place_id=place_id)
+            meta['address'] = loc.address
+            meta['lat'] = loc.latitude
+            meta['lng'] = loc.longitude
+
+        self.dump_metadata(Metadata(**meta), comp_id=comp_id)
+        return

@@ -518,3 +518,44 @@ class RogueFitnessAPIRequestClient(APIRequestClient):
             'sortOrder': 'asc'
         }
         return self._request_json(url, headers=self.headers, params=params)
+
+class Circle21APIRequestClient(APIRequestClient):
+    def __init__(self, base_url='https://api.circle21.events/api'):
+        super().__init__(base_url=base_url)
+
+    def _paginate(
+        self, path: str, 
+        params: dict = {}, 
+        per_page: int = 100
+    ):
+        data = []
+        params['page'] = 1
+        params['per_page'] = per_page
+        while True:
+            r = self._request_json(path, params)
+            data.extend(r['data'])
+            if r['next_page_url'] is None:
+                break
+            params['page'] += 1
+        return data
+
+    def fetch_competitions(self, per_page: int = 100):
+        return self._paginate('/competition', per_page=per_page)
+
+    def fetch_metadata_by_slug(self, slug: str):
+        path = f'/competition/slug/{slug}'
+        return self._request_json(path)
+
+    def fetch_metadata(self, comp_id: str):
+        path = f'/competition/{comp_id}'
+        return self._request_json(path)
+
+    def fetch_workouts(self, comp_id: str, per_page: int = 100):
+        path = '/wods'
+        params = {'competition_id': comp_id}
+        return self._paginate(path, params=params, per_page=per_page)
+
+    def fetch_leaderboard_page(self, comp_id: str, div_id: str, page: int = 1):
+        path = f'/leaderboard'
+        params = {'competition_id': comp_id, 'division_id': div_id}
+        return self._request_json(path, params=params)

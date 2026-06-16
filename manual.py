@@ -707,5 +707,5 @@ if __name__ == '__main__':
     # parse_fict2019_leaderboard(gcp=True)
     # parse_isd2019_leaderboard(gcp=True)
     # parse_rcc2019_leaderboard(gcp=True)
-    parse_ri_btwb_qualifier_leaderboard('ri2020q', gcp=True)
-    parse_ri_btwb_qualifier_leaderboard('ri2019q', gcp=True)
+    # parse_ri_btwb_qualifier_leaderboard('ri2020q', gcp=True)
+    # parse_ri_btwb_qualifier_leaderboard('ri2019q', gcp=True)
