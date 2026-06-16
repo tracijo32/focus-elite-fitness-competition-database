@@ -1103,6 +1103,7 @@ class CrossFitParser(Parser):
             right_index=True
         ).rename(columns={
             'competitorId':'source_athlete_id',
+            'divisionId':'source_division_id',
             'competitorName':'display_name'
         })
         df['overall_rank'] = pd.to_numeric(df['overall_rank'],errors='coerce')
@@ -1123,27 +1124,60 @@ class CrossFitParser(Parser):
     ):
         entrants_df = df.reindex(columns=[
             'source_comp_id','gender','source_athlete_id',
-            'display_name','overall_rank','overall_points','status'
-        ])
+            'display_name','overall_rank','overall_points','status',
+            'countryOfOriginCode','countryOfOriginName',
+            'affiliateName','source_division_id',
+            'age','height','weight'
+        ]).rename(columns={'affiliateName':'home_gym'})
 
+        entrants_df.loc[entrants_df['home_gym'].eq(''),'home_gym'] = None
+        entrants_df.loc[entrants_df['height'].eq(''),'height'] = None
+        entrants_df.loc[entrants_df['weight'].eq(''),'weight'] = None
+        entrants_df['age'] = pd.to_numeric(entrants_df['age'],errors='coerce')
+
+        ## map the country code
+        cc1 = entrants_df['countryOfOriginCode'].apply(
+            lambda x: get_country_code('alpha_2', x)
+        )
+        cc2 = entrants_df['countryOfOriginName'].apply(
+            lambda x: get_country_code('name', x)
+        )
+        entrants_df['country_code'] = cc1.fillna(cc2)
+        entrants_df = entrants_df.drop(
+            columns=['countryOfOriginCode','countryOfOriginName']
+        )
+        entrants_df['wd'] = entrants_df['status'].astype(str)\
+            .str.contains('WD',case=False).fillna(False)
+        entrants_df['dnf'] = entrants_df['status'].astype(str)\
+            .str.contains('DNF',case=False).fillna(False)
         entrants_df['dq'] = entrants_df['status'].astype(str)\
                 .str.contains('DQ',case=False).fillna(False)
+        entrants_df['cut'] = entrants_df['status'].astype(str)\
+            .str.contains('CUT',case=False).fillna(False)
         if entrants_df['overall_points'].str.contains(':').all():
             entrants_df['overall_points'] = entrants_df['overall_points']\
                 .str.split(':').apply(lambda x: int(x[0]) * 60 + int(x[1]))
         else:
-            entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
+            entrants_df['overall_points'] = pd.to_numeric(
+                entrants_df['overall_points'],errors='coerce')
         entrants_df = entrants_df.drop(columns=['status'])
 
+        entrants_df = entrants_df.reindex(
+            columns=['source_comp_id','source_division_id','gender',
+            'source_athlete_id','display_name','overall_score','overall_points',
+            'dq','wd','dnf','cut','country_code','home_gym']
+        )
         return entrants_df
 
     def get_scores_frame(
         self, df: pd.DataFrame
     ):
-        scores_df = df[['source_comp_id','gender','source_athlete_id','scores']]\
+        scores_df = df[['source_comp_id','gender',
+            'source_athlete_id','source_division_id','scores']]\
             .explode('scores',ignore_index=True)
         scores_df = pd.merge(
-            scores_df[['source_comp_id','gender','source_athlete_id']],
+            scores_df[['source_comp_id','gender',
+            'source_athlete_id','source_division_id']],
             scores_df['scores'].apply(pd.Series),
             left_index=True,
             right_index=True
@@ -1171,7 +1205,8 @@ class CrossFitParser(Parser):
 
         scores_df = scores_df.reindex(columns=[
             'source_comp_id','gender','source_athlete_id',
-            'source_workout_id','score_display','tiebreak_display',
+            'source_division_id','source_workout_id',
+            'score_display','tiebreak_display',
             'rank','points'
         ])
 
