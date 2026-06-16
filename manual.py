@@ -189,96 +189,6 @@ def parse_txt(txt,offset=0):
 
     return df
 
-def parse_ri2019_leaderboard(gcp=False):
-    comp_id = 'ri2019'
-    lb = []
-    for gender in ['male','female']:
-        pgs = []
-        for i in range(2):
-            file = f'manual/raw/{comp_id}/{comp_id}_{gender}_{i+1}.txt'
-            txt = load_data(file,gcp=gcp)
-            if gcp:
-                txt = txt.decode('utf-8')
-            pg = parse_txt(txt,offset=4*i).assign(gender=gender[0].upper())\
-                .set_index('gender',append=True)
-            pgs.append(pg)
-        full = pd.merge(pgs[0],pgs[1],left_index=True,right_index=True)
-        lb.append(full)        
-            
-    lb = pd.concat(lb)
-
-    idx = lb.index.to_frame().reset_index(drop=True).assign(source_comp_id=comp_id)
-    idx['display_name'] = idx['name_lower'].str.title()
-    idx['source_athlete_id'] = idx['source_comp_id'] + '_' + \
-        idx['gender'] + '_' + \
-        idx['display_name'].rank().astype(int).astype(str)
-    idx['dq'] = False
-
-    entrants = [
-        Entrant(**row.dropna())
-        for _, row in idx.iterrows()
-    ]
-
-    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
-    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
-
-    scores_df = pd.melt(
-        lb.reset_index(),
-        id_vars=['name_lower','gender'],
-        value_vars=lb.columns,
-        var_name='source_workout_id',
-        value_name='score_display',
-    )
-    scores_df = pd.merge(
-        scores_df,
-        idx,
-        on=['name_lower','gender'],
-        how='left'
-    ).reindex(columns=[
-        'source_athlete_id','gender','source_workout_id','score_display'
-    ])
-
-    assert scores_df['source_athlete_id'].notna().all(), \
-        'Some athletes are not in the athlete master'
-
-    scores_df['capped'] = scores_df['score_display'].str.contains('CAP',case=False)\
-        .astype(int)
-    scores_df['no_score'] = scores_df['score_display'].isna()
-
-    v = scores_df['score_display'].str.split(':',expand=True,n=2)
-    v.columns = ['v1','v2']
-    v['v1'] = v['v1'].str.extract(r'(\d+)').astype(float)
-    v['v2'] = v['v2'].astype(float)
-
-    scores_df = pd.merge(
-        scores_df,
-        v,
-        left_index=True,
-        right_index=True
-    )
-
-    scores_df = scores_df\
-        .sort_values(
-            by=['gender','source_workout_id','no_score','capped','v1','v2'],
-            ascending=True
-        ).assign(source_comp_id='ri2019')
-
-    scores_df['rank'] = scores_df.groupby(['gender','source_workout_id']).cumcount() + 1
-    scores_df['source_workout_id'] = scores_df['source_workout_id'].astype(str)
-    scores_df['score_display'] = scores_df['score_display'].fillna('--').astype(str)
-
-    scores = [
-        Score(**row.dropna())
-        for _, row in scores_df.iterrows()
-    ]
-
-    scores = solve_points_table(entrants,scores,gcp=gcp)
-
-    scores_json = "\n".join([s.model_dump_json() for s in scores])
-    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
-
-    return
-
 def fetch_capturefit_leaderboard(
     event: str,
     entry_type: str,
@@ -537,14 +447,24 @@ def fetch_btwb_config(
     r = requests.get(url)
     return r.json()
 
-def parse_ri2019q_leaderboard(
+RI_BTWB_QUALIFIER_DIVS = {
+    'ri2019q': {'M': 3, 'F': 4},
+    'ri2020q': {'M': 13, 'F': 14},
+}
+
+def parse_ri_btwb_qualifier_leaderboard(
+    comp_id: str,
     gcp: bool = True,
-    refresh: bool = False
-):  
-    comp_id = 'ri2019q'
+    refresh: bool = False,
+):
+    if comp_id not in RI_BTWB_QUALIFIER_DIVS:
+        raise ValueError(
+            f'Unknown qualifier {comp_id!r}; '
+            f'expected one of {sorted(RI_BTWB_QUALIFIER_DIVS)}'
+        )
     lb_data = []
     event_map = {}
-    for gender, div_id in [('M',3),('F',4)]:
+    for gender, div_id in RI_BTWB_QUALIFIER_DIVS[comp_id].items():
         file = f'manual/raw/{comp_id}/config_{div_id}.json'
         if not file_exists(file,gcp=gcp) or refresh:
             data = fetch_btwb_config(div_id)
@@ -634,6 +554,108 @@ def parse_ri2019q_leaderboard(
     dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
     return
 
+RI_SMT_STANDINGS = {
+    'ri2019': {
+        'data_path': 'smt-prod',
+        'divs': {'M': '101', 'F': '201'},
+    },
+    'ri2020': {
+        'data_path': 'smt-2020-prod',
+        'divs': {'M': '101', 'F': '201'},
+    },
+}
+
+def parse_ri_smt_leaderboard(
+    comp_id: str,
+    refresh: bool = False,
+    gcp: bool = True,
+):
+    if comp_id not in RI_SMT_STANDINGS:
+        raise ValueError(
+            f'Unknown invitational {comp_id!r}; '
+            f'expected one of {sorted(RI_SMT_STANDINGS)}'
+        )
+    config = RI_SMT_STANDINGS[comp_id]
+    lb = []
+    event_names = None
+    for gender, div in config['divs'].items():
+        blob = f'manual/raw/{comp_id}-{gender}.json'
+        if not file_exists(blob,gcp) or refresh:
+            url = (
+                f"https://rogue.btwb.com/data/{config['data_path']}"
+                f"/standings-200-{div}.json"
+            )
+            r = requests.get(url)
+            r.raise_for_status()
+            data = r.json()
+            dump_data(json.dumps(data),blob,gcp)
+        else:
+            data = json.loads(load_data(blob,gcp))
+        if event_names is None:
+            event_names = data['events']
+        lb.extend([{'gender': gender, **d} for d in data['competitors']])
+
+    lb = pd.DataFrame(lb)
+    lb['source_comp_id'] = comp_id
+    lb['source_athlete_id'] = lb[['source_comp_id','id']].astype(str).agg('-'.join,axis=1)
+    
+    entrants_df = lb.rename(columns={
+        'name':'display_name','country':'nationality',
+        'rank':'overall_rank','total':'overall_points'
+    })
+    entrants_df['dq'] = entrants_df['status'].eq('DQ')
+    entrants_df['wd'] = entrants_df['status'].eq('WD')
+
+    entrants_df = entrants_df.reindex(columns=[
+        'source_comp_id','gender','source_athlete_id','display_name','nationality',
+        'overall_rank','overall_points','dq','wd'
+    ])
+
+    scores_df = pd.melt(
+        lb,
+        id_vars=['source_comp_id','source_athlete_id','gender'],
+        value_vars=event_names,
+        var_name='event',
+        value_name='data',
+    )
+
+    scores_df = pd.merge(
+        scores_df[['source_comp_id','source_athlete_id','gender']],
+        scores_df['data'].apply(pd.Series),
+        left_index=True,
+        right_index=True
+    ).rename(columns={'order':'source_workout_id','eventOverallRank':'rank'})
+
+    scores_df[['score_display','tiebreak_display']] = scores_df['score'].str.extract(
+        r'^(?P<score_display>.*?)\s*\[(?P<tiebreak_display>[^\]]+)\]$'
+    )
+
+    scores_df['score_display'] = scores_df['score_display'].fillna(scores_df['score'])
+    scores_df['rank'] = scores_df['rank'].astype(str).str.replace('T','',regex=False)
+    scores_df['rank'] = pd.to_numeric(scores_df['rank'], errors='coerce')
+    scores_df['points'] = pd.to_numeric(scores_df['points'], errors='coerce')
+
+    scores_df = scores_df.reindex(columns=[
+        'source_comp_id','source_athlete_id','gender','source_workout_id',
+        'rank','points','score_display','tiebreak_display'
+        ])
+
+    entrants = [
+        Entrant(**row.dropna())
+        for _, row in entrants_df.iterrows()
+    ]
+    entrants_json = "\n".join([e.model_dump_json() for e in entrants])
+    dump_data(entrants_json,f"manual/parsed/{comp_id}/entrants.ndjson",gcp)
+
+    scores = [
+        Score(**row.dropna())
+        for _, row in scores_df.iterrows()
+    ]
+
+    scores_json = "\n".join([s.model_dump_json() for s in scores])
+    dump_data(scores_json,f"manual/parsed/{comp_id}/scores.ndjson",gcp)
+    return
+
 def parse_metadata_all(gcp=False):
     inpath = 'manual/raw/manual-metadata-all.json'
     meta_all = json.loads(load_data(inpath,gcp=gcp))
@@ -654,10 +676,11 @@ def parse_all(gcp=False):
         parse_lcq2025_leaderboard(gcp=gcp)
     except Exception as e:
         print(f'Error parsing LCQ 2025: {e}')
-    try:
-        parse_ri2019_leaderboard(gcp=gcp)
-    except Exception as e:
-        print(f'Error parsing RI 2019: {e}')
+    for comp_id in RI_SMT_STANDINGS:
+        try:
+            parse_ri_smt_leaderboard(comp_id=comp_id, gcp=gcp)
+        except Exception as e:
+            print(f'Error parsing {comp_id}: {e}')
     try:
         parse_fict2019_leaderboard(gcp=gcp)
     except Exception as e:
@@ -670,17 +693,19 @@ def parse_all(gcp=False):
         parse_rcc2019_leaderboard(gcp=gcp)
     except Exception as e:
         print(f'Error parsing RCC 2019: {e}')
-    try:
-        parse_ri2019q_leaderboard(gcp=gcp)
-    except Exception as e:
-        print(f'Error parsing RI 2019 Qualifier: {e}')
+    for comp_id in RI_BTWB_QUALIFIER_DIVS:
+        try:
+            parse_ri_btwb_qualifier_leaderboard(comp_id=comp_id, gcp=gcp)
+        except Exception as e:
+            print(f'Error parsing {comp_id}: {e}')
 
 if __name__ == '__main__':
     parse_metadata_all(gcp=True)
     # parse_scc2019_leaderboard(gcp=True)
     # parse_lcq2025_leaderboard(gcp=True)
-    # parse_ri2019_leaderboard(gcp=True)
+    # parse_ri_smt_leaderboard('ri2019', gcp=True)
     # parse_fict2019_leaderboard(gcp=True)
     # parse_isd2019_leaderboard(gcp=True)
     # parse_rcc2019_leaderboard(gcp=True)
-    parse_ri2019q_leaderboard(gcp=True)
+    parse_ri_btwb_qualifier_leaderboard('ri2020q', gcp=True)
+    parse_ri_btwb_qualifier_leaderboard('ri2019q', gcp=True)
