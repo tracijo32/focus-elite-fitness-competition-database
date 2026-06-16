@@ -40,6 +40,10 @@ class Entrant(BaseModel):
     dq: bool = False
     wd: bool = False
     dnf: bool = False
+    cut: bool = False
+    age: int | None = None
+    height: str | None = None
+    weight: str | None = None
 
     @field_validator('country_code', mode='before')
     def validate_country_code(cls, v):
