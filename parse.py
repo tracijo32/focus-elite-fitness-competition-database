@@ -1049,7 +1049,7 @@ class CompetitionCornerParser(Parser):
                 .reindex(columns=[
                     'source_comp_id','source_workout_id','workout_name',
                     'description','date','start_time','end_time'
-                ]).sort_values(by=['date','start_time','workout_name'])\
+                ]).sort_values(by=['date','source_workout_id'])\
                     .reset_index(drop=True)
         df['source_workout_id'] = df['source_workout_id'].astype(str)
         df['seq'] = df.index + 1
