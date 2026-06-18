@@ -1232,12 +1232,14 @@ class LocalCompParser(Parser):
         self, 
         comp_id: int, 
         division_male: int, 
-        division_female: int
+        division_female: int,
+        refresh: bool = False
     ):
         df = super().get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
         df = pd.merge(
             df[['gender','page']],
@@ -1250,49 +1252,57 @@ class LocalCompParser(Parser):
     def get_entrants_and_scores_frame(self,
         comp_id: int,
         division_male: int,
-        division_female: int    
+        division_female: int,
+        refresh: bool = False
     ):
         df = self.get_leaderboard_frame(
             comp_id=comp_id,
             division_male=division_male,
-            division_female=division_female
+            division_female=division_female,
+            refresh=refresh
         )
 
-        entrants_df = df[['comp_id','gender','entrants']]\
+        entrants_df = df[['comp_id','gender','division_id','entrants']]\
             .explode('entrants',ignore_index=True)
         entrants_df = pd.merge(
-            entrants_df[['comp_id','gender']],
+            entrants_df[['comp_id','division_id','gender']],
             entrants_df['entrants'].apply(pd.Series),
             left_index=True,
             right_index=True
         ).rename(columns={
             'comp_id': 'source_comp_id',
+            'division_id': 'source_division_id',
             'id': 'source_athlete_id',
             'name': 'display_name',
             'rank': 'overall_rank',
-            'points': 'overall_points'
+            'points': 'overall_points',
+            'gym': 'home_gym'
         }).astype({
             'source_comp_id': str,
+            'source_division_id': str,
             'source_athlete_id': str,
         })
 
         entrants_df['overall_points'] = pd.to_numeric(entrants_df['overall_points'],errors='coerce')
         entrants_df['overall_rank'] = pd.to_numeric(entrants_df['overall_rank'],errors='coerce')
-        
-        scores_df = df[['comp_id','gender','scores']]\
+        entrants_df.loc[entrants_df['home_gym'].eq(''),'home_gym'] = None
+
+        scores_df = df[['comp_id','division_id','gender','scores']]\
             .explode('scores',ignore_index=True)
         scores_df = pd.merge(
-            scores_df[['comp_id','gender']],
+            scores_df[['comp_id','division_id','gender']],
             scores_df['scores'].apply(pd.Series),
             left_index=True,
             right_index=True
         ).rename(columns={
             'comp_id': 'source_comp_id',
             'id': 'source_athlete_id',
+            'division_id': 'source_division_id',
             'enum': 'source_workout_id'
         }).astype(
             {
                 'source_comp_id': str,
+                'source_division_id': str,
                 'source_athlete_id': str,
                 'source_workout_id': str
             }
@@ -1318,9 +1328,10 @@ class LocalCompParser(Parser):
         return entrants_df, scores_df
 
     def parse_leaderboard(
-        self,**kwargs
+        self, refresh: bool = False, **kwargs
     ):
         entrants_df, scores_df = self.get_entrants_and_scores_frame(
+            refresh=refresh,
             **kwargs
         )
         self.dump_entrants_frame(entrants_df,**kwargs)

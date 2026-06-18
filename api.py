@@ -405,10 +405,16 @@ class LocalCompAPIRequestClient(APIRequestClient):
                 rank = r1.text.strip()
             else:
                 rank = r2.text.strip()
+            g = div.find_next_sibling()
+            if g is None:
+                gym = None
+            else:
+                gym = g.text.strip()
             entrants.append({
                 'name': team_name,
                 'id': team_id,
-                'rank': rank
+                'rank': rank,
+                'gym': gym
             })
         return entrants
 
