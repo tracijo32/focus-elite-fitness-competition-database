@@ -169,13 +169,16 @@ def parse_all_competitions(
     cf_results = pd.DataFrame([
         res for res in results if 'page' in res
     ])
-    cf_results['details'] = cf_results[['div_id','page','status']].to_dict(orient='records')
-    cf_results = cf_results.groupby('comp_id').agg(
-        leaderboard = ('status','min'),
-        details = ('details', list)
-    ).reset_index().assign(source='crossfit',metadata=0,workouts=0)\
-        .rename(columns={'comp_id':'source_comp_id'})\
-            .to_dict(orient='records')
+    if len(cf_results) > 0:
+        cf_results['details'] = cf_results[['div_id','page','status']].to_dict(orient='records')
+        cf_results = cf_results.groupby('comp_id').agg(
+            leaderboard = ('status','min'),
+            details = ('details', list)
+        ).reset_index().assign(source='crossfit',metadata=0,workouts=0)\
+            .rename(columns={'comp_id':'source_comp_id'})\
+                .to_dict(orient='records')
+    else:
+        cf_results = []
 
     no_results = no_parse[['source','comp_id']]\
         .assign(metadata=0,workouts=0,leaderboard=0)\
