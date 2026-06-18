@@ -1103,10 +1103,10 @@ class CrossFitParser(Parser):
             right_index=True
         ).rename(columns={
             'competitorId':'source_athlete_id',
-            'divisionId':'source_division_id',
             'competitorName':'display_name'
         })
         df['overall_rank'] = pd.to_numeric(df['overall_rank'],errors='coerce')
+        df['source_division_id'] = df['gender'].map({'M':'1','F':'2'})
 
         ## some leaderboards are copied from another source, so they didn't bother
         ## to link up the athletes with CF IDs. In that case, we'll generate one.
