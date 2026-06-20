@@ -6,29 +6,7 @@ from util import convert_value_to_display
 from parameters import GoogleCloudParameters
 from geopy.geocoders import GoogleV3
 from bs4 import BeautifulSoup
-from pycountry import countries
-
-def get_country_code(type: str, value: str | None):
-    if value is None:
-        return None
-
-    if type == 'alpha_3':
-        try:
-            return countries.get(alpha_3=value).alpha_3
-        except:
-            return None
-    elif type == 'alpha_2':
-        try:
-            return countries.get(alpha_2=value).alpha_3
-        except:
-            return None
-    elif type == 'name':
-        try:
-            return countries.get(name=value).alpha_3
-        except:
-            return None
-    else:
-        raise ValueError(f"Invalid type: {type}")
+from util import get_country_code
 
 class Parser:
     def __init__(self, manager: inventory.InventoryManager):
@@ -255,7 +233,7 @@ class StrongestParser(Parser):
             'gym': 'home_gym'
         })
         entrants_df['country_code'] = entrants_df['country_code'].apply(
-            lambda x: get_country_code('alpha_2', x)
+            get_country_code
         )
 
         entrants_df['overall_rank'] = entrants_df['overall_rank'].str.extract(r'(\d+)')\
@@ -804,18 +782,11 @@ class CompetitionCornerParser(Parser):
             'affiliate': 'home_gym'
         })
 
-        cc1 = entrants_df['countryCode'].apply(
-            lambda x: get_country_code('alpha_3', x)
-        )
-        cc2 = entrants_df['countryShortCode'].apply(
-            lambda x: get_country_code('alpha_2', x)
-        )
-        cc3 = entrants_df['countryName'].apply(
-            lambda x: get_country_code('name', x)
-        )
+        cc1 = entrants_df['countryCode'].apply(get_country_code)
+        cc2 = entrants_df['countryShortCode'].apply(get_country_code)
+        cc3 = entrants_df['countryName'].apply(get_country_code)
 
         entrants_df['country_code'] = cc1.fillna(cc2).fillna(cc3)
-
 
         entrants_df = entrants_df.reindex(
             columns = [
@@ -1136,12 +1107,8 @@ class CrossFitParser(Parser):
         entrants_df['age'] = pd.to_numeric(entrants_df['age'],errors='coerce')
 
         ## map the country code
-        cc1 = entrants_df['countryOfOriginCode'].apply(
-            lambda x: get_country_code('alpha_2', x)
-        )
-        cc2 = entrants_df['countryOfOriginName'].apply(
-            lambda x: get_country_code('name', x)
-        )
+        cc1 = entrants_df['countryOfOriginCode'].apply(get_country_code)
+        cc2 = entrants_df['countryOfOriginName'].apply(get_country_code)
         entrants_df['country_code'] = cc1.fillna(cc2)
         entrants_df = entrants_df.drop(
             columns=['countryOfOriginCode','countryOfOriginName']

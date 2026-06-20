@@ -227,3 +227,38 @@ def recover_points_table(
     }
 
     return recovered_points
+
+from pycountry import countries
+def get_country_by_name(x):
+    c = countries.get(name=x)
+    if c is not None:
+        return c
+    
+    c = countries.get(official_name=x)
+    if c is not None:
+        return c
+    
+    c = countries.get(common_name=x)
+    if c is not None:
+        return c
+
+    fuzzy = countries.search_fuzzy(x)
+    if len(fuzzy) > 0:
+        return fuzzy[0]
+    
+    return None
+
+def get_country_code(x: str | None) -> str | None:
+    if x is None:
+        return None
+    elif len(x) == 3:
+        c = countries.get(alpha_3=x)
+    elif len(x) == 2:
+        c = countries.get(alpha_2=x)
+    else:
+        c = get_country_by_name(x)
+    if c is None:
+        return None
+    else:
+        return c.alpha_3
+
