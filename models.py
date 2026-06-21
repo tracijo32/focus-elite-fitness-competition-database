@@ -32,6 +32,7 @@ class Entrant(BaseModel):
     gender: str
     display_name: str
     source_athlete_id: str
+    source_entrant_id: str | None = None
     source_division_id: str | None = None
     home_gym: str | None = None
     country_code: str | None = None
@@ -47,12 +48,9 @@ class Entrant(BaseModel):
 
     @field_validator('country_code', mode='before')
     def validate_country_code(cls, v):
-        if v is None:
-            return None
-        try:
-            return countries.get(alpha_3=v).alpha_3
-        except ValueError:
-            raise ValueError(f"Invalid country code: {v}")
+        import re
+        assert re.match(r'^[A-Z]{3}$', v), f"Invalid country code: {v}"
+        return v
 
 class Score(BaseModel):
     source_comp_id: str
