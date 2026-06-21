@@ -355,3 +355,47 @@ class CaptureFitInventoryManager(InventoryManager):
                     **kwargs
                 )
 
+class BTWBWireInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.BTWBWireAPIRequestClient(),
+            source='btwb-thewire',
+            api_data_path=api_data_path
+        )
+
+    def _build_config_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/config/{kwargs["div_id"]}.json'
+
+    @staticmethod
+    def _get_lb_pg_cnt(data):
+        return data['Pages']
+
+    def load_config(
+        self,
+        refresh: bool = False,
+        **kwargs
+    ):
+        return self._load_or_fetch(
+            self._build_config_blob,
+            self.api_client.fetch_config,
+            refresh,
+            **kwargs)
+
+    def load_leaderboard_page(
+        self,
+        refresh: bool = False,
+        **kwargs
+    ):
+        config = self.load_config(
+            refresh,
+            **kwargs
+        )
+        kwargs['leaderboard_id'] = config['LeaderboardId']
+        data = self._load_or_fetch(
+            self._build_lb_pg_blob,
+            self.api_client.fetch_leaderboard_page,
+            refresh,
+            **kwargs
+        )
+        return {**config, **data}
+

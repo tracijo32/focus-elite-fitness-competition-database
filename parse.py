@@ -1484,3 +1484,106 @@ class CaptureFitParser(Parser):
         self.dump_metadata(meta, kwargs['comp_id'])
         return
         
+class BTWBWireParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=inventory.BTWBWireInventoryManager
+        )
+
+    def get_leaderboard_frame(
+        self,
+        **kwargs
+    ):
+
+        df = super().get_leaderboard_frame(**kwargs)
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).explode('Standings',ignore_index=True)
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['Standings'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id',
+            'MemberId': 'source_athlete_id',
+            'AthleteId': 'source_entrant_id'
+        }).astype({
+            'source_division_id': str,
+            'source_athlete_id': str,
+            'source_entrant_id': str
+        })
+        return df
+
+    @staticmethod
+    def get_entrants_frame(df):
+        entrants_df = df.rename(columns={
+            'PlaceOrdinal':'overall_rank',
+            'DisqualifiedCount':'dq',
+            'PlacePoints':'overall_points',
+            'WithdrawnCount':'wd','FullName':'display_name',
+            'Nationality':'country_code','Age':'age'
+        }).reindex(columns=[
+            'source_comp_id','source_division_id',
+            'source_athlete_id','source_entrant_id',
+            'overall_rank','overall_points',
+            'dq','wd','display_name','country_code','age','gender'
+        ])
+        entrants_df['dq'] = entrants_df['dq'].gt(0)
+        entrants_df['wd'] = entrants_df['wd'].gt(0)
+        entrants_df['country_code'] = entrants_df['country_code']\
+            .apply(get_country_code)
+        return entrants_df
+
+    @staticmethod
+    def get_scores_frame(df):
+        scores_df = pd.merge(
+            df[['source_comp_id','source_division_id',
+            'gender','source_athlete_id','source_entrant_id']],
+            df['EventStandingsData'].apply(json.loads),
+            left_index=True,
+            right_index=True
+        ).explode('EventStandingsData',ignore_index=True)
+            
+        scores_df = pd.merge(
+            scores_df[['source_comp_id','source_division_id',
+            'source_athlete_id','gender','source_entrant_id']],
+            scores_df['EventStandingsData'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'PlaceRank':'rank',
+            'PlacePoints':'points',
+            'EventId':'source_workout_id'
+        }).astype({
+            'source_workout_id': str
+        })
+
+        scores_df['score_raw'] = scores_df['ScoreRankingPhrase'].str.split('|').str[-1]
+
+        scores_df[['score_display','tiebreak_display']] = scores_df['score_raw']\
+            .str.extract(r'^(?P<score_display>.*?)\s*\[(?P<tiebreak_display>[^\]]+)\]'
+        )
+
+        scores_df.loc[
+            ~scores_df['score_raw'].str.contains(r'\d+'),
+            'score_display'
+        ] = scores_df['score_raw']
+
+        scores_df = scores_df.reindex(columns=[
+            'source_comp_id','source_athlete_id','source_entrant_id',
+            'source_division_id','source_workout_id','gender',
+            'rank','points','score_display','tiebreak_display'])
+        return scores_df
+
+    def parse_leaderboard(self,**kwargs):
+        df = self.get_leaderboard_frame(**kwargs)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
+        return

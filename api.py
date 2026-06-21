@@ -644,3 +644,32 @@ class CaptureFitAPIRequestClient(APIRequestClient):
             "gender": gender,
         }
         return self._request_json(path,method="POST",data=payload)
+
+class BTWBWireAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url = 'https://us-central1-btwb-thewire.cloudfunctions.net'
+        )   
+    def fetch_config(
+        self,
+        div_id: int,
+        **kwargs
+    ):
+        path = '/ProdLeaderboards'
+        params = {
+            'division_id': div_id
+        }
+        return self._request_json(path,params=params)
+
+    def fetch_leaderboard_page(
+        self,
+        leaderboard_id: int,
+        page: int = 1,
+        **kwargs
+    ):
+        path = f'/ProdLeaderboardPages'
+        params = {
+            'leaderboard_id': leaderboard_id,
+            'page': page-1
+        }
+        return self._request_json(path,params=params)
