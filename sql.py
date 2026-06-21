@@ -133,9 +133,7 @@ def create_metadata_external_table():
         model_name = 'metadata_raw',
         source_uris = [
             f'gs://{BUCKET_NAME}/{source}/parsed/*/metadata.ndjson'
-            for source in SOURCES if source != 'crossfit'
-        ] + [
-            f'gs://{BUCKET_NAME}/crossfit/metadata.ndjson'
+            for source in SOURCES
         ]
     )
 def create_metadata_view():
@@ -230,6 +228,25 @@ def create_crossfit_athletes_external_table():
 
     return table
 
+def create_workout_seq_overrides_external_table():
+    ext_conf = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
+    ext_conf.source_uris = [f'gs://{BUCKET_NAME}/consolidated/workout-seq-overrides.ndjson']
+
+    schema = [
+        bigquery.SchemaField('source', 'STRING', 'REQUIRED'),
+        bigquery.SchemaField('source_comp_id', 'STRING', 'REQUIRED'),
+        bigquery.SchemaField('source_workout_id', 'STRING', 'REQUIRED'),
+        bigquery.SchemaField('seq', 'INTEGER', 'REQUIRED'),
+    ]
+    table = bigquery.Table(f'{gcp_params.project_id}.staging.workout_seq_overrides')
+    table.schema = schema
+    table.external_data_configuration = ext_conf
+
+    CLIENT.delete_table(table, not_found_ok=True)
+    CLIENT.create_table(table)
+
+    return table
+
 def create_location_overrides_external_table():
     ext_conf = bigquery.ExternalConfig("NEWLINE_DELIMITED_JSON")
     ext_conf.source_uris = [f'gs://{BUCKET_NAME}/consolidated/location-overrides.ndjson']
@@ -303,6 +320,86 @@ def create_athletes_source_id_view():
 
 ###----------------------------------------------------------------------------
 ### global mapped tables in dev
+def create_source_to_global_metadata_table():
+    query = """
+    WITH joined AS (
+    SELECT 
+        s.global_comp_id,
+        s.priority AS source_priority,
+        m.title,
+        m.start_date,
+        m.end_date,
+        m.venue_name,
+        m.address,
+        m.lat,
+        m.lng,
+        m.virtual
+    FROM `staging.sources` s
+    LEFT JOIN `staging.metadata` m
+        ON s.source = m.source
+    AND s.source_comp_id = m.source_comp_id
+    ), metadata AS (
+        SELECT
+        global_comp_id,
+        1 as priority,
+        (ARRAY_AGG(title       IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS title,
+        (ARRAY_AGG(start_date  IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS start_date,
+        (ARRAY_AGG(end_date    IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS end_date,
+        (ARRAY_AGG(venue_name  IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS venue_name,
+        (ARRAY_AGG(address     IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS address,
+        (ARRAY_AGG(lat         IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS lat,
+        (ARRAY_AGG(lng         IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS lng,
+        (ARRAY_AGG(virtual     IGNORE NULLS ORDER BY source_priority LIMIT 1))[OFFSET(0)] AS virtual
+        FROM joined
+        GROUP BY global_comp_id
+    ), locations_flat AS (
+        SELECT
+            COALESCE(l.global_comp_id, m.global_comp_id) AS global_comp_id,
+            COALESCE(l.venue_name, m.venue_name) AS venue_name,
+            COALESCE(l.address, m.address) AS address,
+            COALESCE(l.lat, m.lat) AS lat,
+            COALESCE(l.lng, m.lng) AS lng,
+            COALESCE(l.priority, m.priority) AS priority
+        FROM `staging.location_overrides` l
+        RIGHT JOIN metadata m
+            ON l.global_comp_id = m.global_comp_id
+            AND l.priority = m.priority
+    )
+    SELECT
+        m.global_comp_id,
+        m.title,
+        m.start_date,
+        m.end_date,
+        m.virtual,
+        ARRAY_AGG(
+            IF(
+                m.virtual,
+                NULL,
+                STRUCT(
+                    f.venue_name,
+                    f.address,
+                    f.lat,
+                    f.lng
+                )
+            )
+            IGNORE NULLS
+            ORDER BY f.priority
+        ) AS locations
+    FROM metadata m
+    LEFT JOIN locations_flat f
+        ON m.global_comp_id = f.global_comp_id
+    GROUP BY
+        m.global_comp_id,
+        m.title,
+        m.start_date,
+        m.end_date,
+        m.virtual
+    """
+    table_name = 'source_to_global_metadata'
+    return _create_table(table_name, query, 'dev')
+
+
+
 def create_source_to_global_entrants_table():
     query = """
     WITH comps AS (
