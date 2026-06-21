@@ -565,3 +565,82 @@ class Circle21APIRequestClient(APIRequestClient):
         path = f'/leaderboard'
         params = {'competition_id': comp_id, 'division_id': div_id}
         return self._request_json(path, params=params)
+
+class CaptureFitAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(base_url='https://capturefit.com')
+
+    @staticmethod
+    def get_events_titles_and_dates(soup: BeautifulSoup):
+        events = soup.find_all(
+            'div',
+            attrs={'class':'event'}
+        )
+        
+        data = []
+        for event in events:
+            tag = event.find(
+                'a', href=True,
+                attrs={'class':'title'}
+                )
+            link = tag['href']
+            title = tag.text.strip()
+            dates = tag.next_sibling.next_sibling.text.strip()
+            year = int(event['data-year'])
+            data.append(
+                {
+                    'event_link': link,
+                    'title': title,
+                    'dates': dates,
+                    'year': year
+                }
+            )
+        return data
+
+    def fetch_competitions(self,return_soup=False):
+        path = '/past-events'
+        html = self._request_json(path)
+        soup = BeautifulSoup(html, 'html.parser')
+        if return_soup:
+            return soup
+        data = self.get_events_titles_and_dates(soup)
+        new_data = [
+            {
+                'slug': d['event_link'].split('/')[-1],
+                'comp_id': self.fetch_comp_id_from_slug(d['event_link'].split('/')[-1]),
+                **d
+            } for d in data
+        ]
+        return new_data
+
+    def fetch_comp_id_from_slug(self, slug: str):
+        import re
+        path = f'/leaderboard/{slug}'
+        html = self._request_json(path)
+        soup = BeautifulSoup(html, 'html.parser')
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if 'staticleaderboard' in script.text:
+                match = re.search(r"""var id\s*=\s*['"]([^'"]+)['"]""", script.text)
+                return match.group(1)
+        
+    def fetch_divisions(self, comp_id: str):
+        path = f'/api/event-workouts/divisions/{comp_id}'        
+        return self._request_json(path)
+
+    def fetch_leaderboard_page(
+        self,
+        comp_id: str,
+        entrytype: str,
+        category: str,
+        gender: str,
+        **kwargs
+    ):
+        path = "/api/leaderboards/get-calulated-leaderboard"
+        payload = {
+            "event": comp_id,
+            "entrytype": entrytype, 
+            "category": category,
+            "gender": gender,
+        }
+        return self._request_json(path,method="POST",data=payload)

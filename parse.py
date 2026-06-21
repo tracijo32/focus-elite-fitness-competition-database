@@ -1331,3 +1331,156 @@ class Circle21Parser(Parser):
 
         self.dump_metadata(Metadata(**meta), comp_id=comp_id)
         return
+
+class CaptureFitParser(Parser):
+    def __init__(self):
+        super().__init__(manager=inventory.CaptureFitInventoryManager)
+
+    def get_leaderboard_frame(
+        self,**kwargs
+    ):
+        df = super().get_leaderboard_frame(**kwargs)
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series)['leaderboard'],
+            left_index=True,
+            right_index=True
+        ).explode('leaderboard', ignore_index=True)
+
+        df = pd.merge(
+            df.drop(columns=['leaderboard']),
+            df['leaderboard'].apply(pd.Series)\
+                .drop(columns=['gender']),
+            left_index=True,
+            right_index=True
+        ).drop(columns=[])
+
+        df = pd.merge(
+            df.drop(columns=['evententrydisplay',
+            '_id','event','evententry','entrynumber']),
+            df['evententrydisplay'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id',
+            'user':'source_athlete_id',
+            'entrynumber':'source_entrant_id'
+        })
+        return df
+
+    @staticmethod
+    def get_entrants_frame(df):
+        entrants_df = df.rename(columns=
+            {
+                'name':'display_name',
+                'total':'overall_points',
+                'position':'overall_rank',
+                'gymname':'home_gym',
+                'country':'country_code'
+            }
+        ).reindex(
+            columns=['source_comp_id','source_division_id','gender',
+            'source_athlete_id','source_entrant_id','display_name',
+            'overall_points','overall_rank','home_gym','country_code']
+        )
+
+        entrants_df['country_code'] = entrants_df['country_code']\
+            .fillna('').apply(get_country_code)
+        
+        return entrants_df
+
+    @staticmethod
+    def get_scores_frame(df):
+        scores_df = df.reindex(columns=[
+            'source_comp_id','source_division_id','gender',
+            'source_athlete_id','source_entrant_id','scores'
+        ]).explode('scores',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['scores']),
+            scores_df['scores'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        )
+
+        scores_df['source_workout_id'] = scores_df['_id'].astype(str)
+        scores_df['seq'] = scores_df['workoutnumber'].astype(int)
+        scores_df['score_display'] = scores_df['time'].fillna('--')
+        scores_df['rank'] = pd.to_numeric(scores_df['position'],errors='coerce')
+        scores_df['tiebreak_display'] = scores_df['tiebreaker'].apply(
+            lambda x: str(int(x)) if not pd.isna(x) else x
+        )
+
+        scores_df = scores_df.reindex(
+            columns=[
+                'source_comp_id','source_division_id','gender',
+                'source_athlete_id','source_entrant_id','source_workout_id',
+                'score_display','rank','points','tiebreak_display'
+            ]
+        ).dropna(subset=['source_workout_id'])
+        return scores_df
+        
+    def get_workout_frame(self,**kwargs):
+        df =super().get_leaderboard_frame(**kwargs)
+
+        name_df = df['data'].apply(pd.Series)['leaderboard']\
+            .explode().apply(pd.Series)['scores']\
+                .explode().apply(pd.Series)[['workoutname','workoutnumber']]\
+                    .drop_duplicates().dropna()\
+                        .rename(columns={
+                            'workoutname':'workout_name',
+                            'workoutnumber':'seq'
+                        })
+        name_df['seq'] = name_df['seq'].astype(int)
+
+        wo_df = df['data'].apply(pd.Series)['eventworkout'].apply(pd.Series)\
+            ['workouts'].explode().apply(pd.Series)\
+                .reindex(columns=['_id','name','content','heatstart'])\
+                    .drop_duplicates()\
+            .rename(columns={
+                '_id':'source_workout_id',
+                'name':'workout_name',
+                'content':'description'
+            })
+
+        wo_df = pd.merge(
+            wo_df, name_df,
+            on=['workout_name'],
+            how='left'
+        ).assign(
+            source_comp_id=kwargs['comp_id']
+        )
+
+        return wo_df
+
+    def parse_workouts(self,**kwargs):
+        wo_df = self.get_workout_frame(**kwargs)
+        self.dump_workouts_frame(wo_df,**kwargs)
+        return
+
+    def parse_leaderboard(self,**kwargs):
+        df = self.get_leaderboard_frame(**kwargs)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
+        return
+
+    def parse_metadata(self,**kwargs):
+        meta = self.manager.load_metadata(**kwargs)
+        meta_df = pd.DataFrame(meta)
+        meta_df[['start_date','end_date']] = meta_df['dates'].str.split(' - ', expand=True)
+        meta_df['start_date'] = pd.to_datetime(meta_df['start_date'])
+        meta_df['end_date'] = pd.to_datetime(meta_df['end_date'])
+
+        meta_df = meta_df[meta_df['comp_id'] == kwargs['comp_id']]\
+            .rename(columns={'comp_id':'source_comp_id'})
+
+        wo_df = self.get_workout_frame(**kwargs)
+        meta_df['virtual'] = wo_df['heatstart'].isna().all()
+
+        meta = Metadata(**meta_df.to_dict(orient='records')[0])
+        self.dump_metadata(meta, kwargs['comp_id'])
+        return
+        

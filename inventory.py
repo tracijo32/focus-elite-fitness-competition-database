@@ -291,3 +291,67 @@ class Circle21InventoryManager(InventoryManager):
             refresh,
             **kwargs
         )
+
+class CaptureFitInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.CaptureFitAPIRequestClient(),
+            source='capturefit',
+            api_data_path=api_data_path
+        )
+
+    def _build_divisions_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/divisions.json'
+
+    def _build_md_blob(self, **kwargs):
+        return f'{self.prefix}/metadata-all.json'
+
+    def load_metadata(self,refresh: bool = False,**kwargs):
+        return self._load_or_fetch(
+            self._build_md_blob,
+            self.api_client.fetch_competitions,
+            refresh=refresh,
+            **kwargs
+        )
+
+    def load_divisions(
+        self,
+        comp_id: str,
+        refresh: bool = False,
+        **kwargs
+    ):
+        return self._load_or_fetch(
+            self._build_divisions_blob,
+            self.api_client.fetch_divisions,
+            refresh,
+            comp_id=comp_id
+        )
+
+    def load_leaderboard_page(
+        self,
+        comp_id: str,
+        div_id: str,
+        refresh: bool = False,
+        page: int = 1,
+        **kwargs
+    ):
+        divs = self.load_divisions(
+            comp_id=comp_id,
+            refresh=refresh
+        )
+        for div in divs:
+            if div['_id'] == div_id:
+                kwargs = {
+                    'comp_id': comp_id,
+                    'div_id': div_id,
+                    'page': page,
+                    'entrytype': div['entrytype'],
+                    'category': div['category'],
+                    'gender': div['gender'],
+                }
+                return self._load_or_fetch(
+                    self._build_lb_pg_blob,
+                    self.api_client.fetch_leaderboard_page,
+                    **kwargs
+                )
+
