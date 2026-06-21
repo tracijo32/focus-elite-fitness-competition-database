@@ -229,36 +229,73 @@ def recover_points_table(
     return recovered_points
 
 from pycountry import countries
-def get_country_by_name(x):
-    c = countries.get(name=x)
-    if c is not None:
-        return c
-    
-    c = countries.get(official_name=x)
-    if c is not None:
-        return c
-    
-    c = countries.get(common_name=x)
-    if c is not None:
-        return c
+from rapidfuzz import process
+from unidecode import unidecode
 
-    fuzzy = countries.search_fuzzy(x)
-    if len(fuzzy) > 0:
-        return fuzzy[0]
-    
-    return None
+COUNTRY_NAMES = {}
+for c in countries:
+    try:
+        n = unidecode(c.official_name.lower())
+        COUNTRY_NAMES[n] = c.alpha_3
+    except:
+        pass
+
+    try:
+        n = unidecode(c.name.lower())
+        COUNTRY_NAMES[n] = c.alpha_3
+    except:
+        pass
+
+    try:
+        n = unidecode(c.common_name.lower())
+        COUNTRY_NAMES[n] = c.alpha_3
+    except:
+        pass
+
+    COUNTRY_NAMES['palestinian territory'] = countries.get(alpha_3='PSE').alpha_3
+    COUNTRY_NAMES['estados unidos'] = countries.get(alpha_2='US').alpha_3
+    COUNTRY_NAMES['deutschland'] = countries.get(alpha_2='DE').alpha_3
+    COUNTRY_NAMES['espana'] = countries.get(alpha_2='ES').alpha_3
+    COUNTRY_NAMES['turkey'] = countries.get(alpha_3='TUR').alpha_3
+    COUNTRY_NAMES['iroquois'] = 'HAU'
+    COUNTRY_NAMES['haudenosaunee'] = 'HAU'
+    COUNTRY_NAMES['america'] = countries.get(alpha_2='US').alpha_3
+    COUNTRY_NAMES['rossiia'] = countries.get(alpha_2='RU').alpha_3
+    COUNTRY_NAMES['osterreich'] = countries.get(alpha_2='AT').alpha_3
+
+
+def fuzzy_match_country(x):
+    match, _, _ = process.extractOne(
+        unidecode(x.lower()).strip(),
+        COUNTRY_NAMES.keys(),
+        score_cutoff=70
+    )
+    return COUNTRY_NAMES[match] if match is not None else None
 
 def get_country_code(x: str | None) -> str | None:
     if x is None:
         return None
-    elif len(x) == 3:
-        c = countries.get(alpha_3=x)
-    elif len(x) == 2:
-        c = countries.get(alpha_2=x)
-    else:
-        c = get_country_by_name(x)
-    if c is None:
-        return None
-    else:
-        return c.alpha_3
 
+    if len(x) == 3:
+        try:
+            c = countries.get(alpha_3=x)
+            if c is not None:
+                return c.alpha_3
+        except ValueError:
+            pass
+    elif len(x) == 2:
+        try:
+            c = countries.get(alpha_2=x)
+            if c is not None:
+                return c.alpha_3
+        except ValueError:
+            pass
+    else:
+        try:
+            c = fuzzy_match_country(x)
+            if c is not None:
+                return c
+        except:
+            pass
+
+    return None
