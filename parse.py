@@ -1587,3 +1587,279 @@ class BTWBWireParser(Parser):
         self.dump_entrants_frame(entrants_df,**kwargs)
         self.dump_scores_frame(scores_df,**kwargs)
         return
+
+
+class WodcastAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url='https://www.wodcast.com'
+        )
+
+    def fetch_workout_results_page(
+        self,
+        comp_id: int,
+        div_id: str,
+        seq: int,
+        page: int = 1,
+        page_size: int = 200,
+    ):
+        data = {
+            'eventID': comp_id,
+            'gender': div_id,
+            'eventNumber': seq,
+            'pageNumber': page,
+            'pageSize': page_size,
+        }
+        params = {'format': 'json'}
+
+        path = '/services/GetAffiliateEventResultsService.php'
+        return self._request_json(path,method="POST",params=params,data=data)
+
+    def fetch_overall_results_page(
+        self,
+        comp_id: int,
+        div_id: str,
+        page: int = 1,
+        page_size: int = 200
+    ):
+        data = {
+            'eventID': comp_id,
+            'gender': div_id,
+            'pageNumber': page,
+            'pageSize': page_size
+        }
+        params = {'format': 'json'}
+
+        path = '/services/GetAffiliateEventOverallResultsService.php'
+        return self._request_json(path,method="POST",params=params,data=data)
+
+    def fetch_leaderboard_page(
+        self,
+        page: int = 1, 
+        page_size: int = 200,
+        **kwargs
+    ):
+
+        data = {}
+        res = self.fetch_overall_results_page(
+            comp_id=kwargs['comp_id'],
+            div_id=kwargs['div_id'],
+            page=page,
+            page_size=page_size
+        )
+        data['overall'] = res['athletes']
+        data['currentPage'] = res['currentPage']
+        data['totalPages'] = res['totalPages']
+        
+        n = 1
+        while True:
+            try:
+                wod_res = self.fetch_workout_results_page(
+                    comp_id=kwargs['comp_id'],
+                    div_id=kwargs['div_id'],
+                    seq=n,
+                    page=page,
+                    page_size=page_size
+                )
+            except Exception as e:
+                break
+            data[f'event_{n}'] = wod_res['athletes']
+            n += 1
+        
+        return data
+
+class WodcastInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = WodcastAPIRequestClient(),
+            source='wodcast',
+            api_data_path=api_data_path
+        )
+
+    @staticmethod
+    def _get_lb_pg_cnt(data):
+        return data['totalPages']
+        
+class WodcastParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=WodcastInventoryManager
+        )
+
+    def get_leaderboard_frame(self,**kwargs):
+        df = super().get_leaderboard_frame(**kwargs)
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id'
+        }).astype({
+            'source_comp_id':str,
+            'source_division_id':str
+        })
+        return df
+    
+    @staticmethod
+    def get_entrants_frame(df):
+        entrants_df = df.explode('overall',ignore_index=True)
+
+        entrants_df = pd.merge(
+            entrants_df[['source_comp_id','source_division_id','gender']],
+            entrants_df['overall'].apply(pd.Series)\
+                .drop(columns=['gender']),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'id':'source_entrant_id',
+            'affiliate_name':'home_gym',
+            'result':'overall_points',
+            'rank':'overall_rank'
+        })
+        entrants_df['display_name'] = entrants_df['first_name'].str.strip() + \
+            ' ' + entrants_df['last_name'].str.strip()
+
+        entrants_df['source_athlete_id'] = entrants_df['source_entrant_id']
+        return entrants_df
+
+    @staticmethod
+    def get_scores_frame(df):
+        scores_df = pd.melt(
+            df,
+            id_vars=['source_comp_id','source_division_id','gender'],
+            value_vars=[c for c in df.columns if c.startswith('event_')],
+            var_name='source_workout_id',
+            value_name='data'
+        )
+        scores_df['source_workout_id'] = scores_df['source_workout_id'].str.extract(r'(\d+)')
+        scores_df = scores_df.explode('data',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['data']),
+            scores_df['data'].apply(pd.Series)\
+                .drop(columns=['gender']),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'id':'source_entrant_id',
+            'result': 'score_display'
+        }).reindex(columns=[
+            'source_comp_id',
+            'source_division_id',
+            'gender',
+            'source_workout_id',
+            'source_entrant_id',
+            'score_display',
+            'rank'
+        ])
+        scores_df['rank'] = scores_df['rank'].astype(int)
+
+        scores_df = scores_df[
+            scores_df.groupby('source_workout_id')['score_display']\
+                .transform(lambda x: x.str.strip().ne('0').any())
+        ]
+
+        scores_df['source_athlete_id'] = scores_df['source_entrant_id']
+        return scores_df
+
+    def parse_leaderboard(self,**kwargs):
+        df = self.get_leaderboard_frame(**kwargs)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
+        return
+        
+class WodcastParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=inventory.WodcastInventoryManager
+        )
+
+    def get_leaderboard_frame(self,**kwargs):
+        df = super().get_leaderboard_frame(**kwargs)
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id'
+        }).astype({
+            'source_comp_id':str,
+            'source_division_id':str
+        })
+        return df
+    
+    @staticmethod
+    def get_entrants_frame(df):
+        entrants_df = df.explode('overall',ignore_index=True)
+
+        entrants_df = pd.merge(
+            entrants_df[['source_comp_id','source_division_id','gender']],
+            entrants_df['overall'].apply(pd.Series)\
+                .drop(columns=['gender']),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'id':'source_entrant_id',
+            'affiliate_name':'home_gym',
+            'result':'overall_points',
+            'rank':'overall_rank'
+        })
+        entrants_df['display_name'] = entrants_df['first_name'].str.strip() + \
+            ' ' + entrants_df['last_name'].str.strip()
+
+        entrants_df['source_athlete_id'] = entrants_df['source_entrant_id']
+        return entrants_df
+
+    @staticmethod
+    def get_scores_frame(df):
+        scores_df = pd.melt(
+            df,
+            id_vars=['source_comp_id','source_division_id','gender'],
+            value_vars=[c for c in df.columns if c.startswith('event_')],
+            var_name='source_workout_id',
+            value_name='data'
+        )
+        scores_df['source_workout_id'] = scores_df['source_workout_id'].str.extract(r'(\d+)')
+        scores_df = scores_df.explode('data',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['data']),
+            scores_df['data'].apply(pd.Series)\
+                .drop(columns=['gender']),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'id':'source_entrant_id',
+            'result': 'score_display'
+        }).reindex(columns=[
+            'source_comp_id',
+            'source_division_id',
+            'gender',
+            'source_workout_id',
+            'source_entrant_id',
+            'score_display',
+            'rank'
+        ])
+        scores_df['rank'] = scores_df['rank'].astype(int)
+
+        scores_df = scores_df[
+            scores_df.groupby('source_workout_id')['score_display']\
+                .transform(lambda x: x.str.strip().ne('0').any())
+        ]
+
+        scores_df['source_athlete_id'] = scores_df['source_entrant_id']
+        return scores_df
+
+    def parse_leaderboard(self,**kwargs):
+        df = self.get_leaderboard_frame(**kwargs)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
+        return

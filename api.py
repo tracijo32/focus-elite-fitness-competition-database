@@ -302,48 +302,81 @@ class ScoreItAPIRequestClient(APIRequestClient):
 class WodcastAPIRequestClient(APIRequestClient):
     def __init__(self):
         super().__init__(
-            base_url='https://www.wodcast.com/services'
+            base_url='https://www.wodcast.com'
         )
 
-    def get_workout_results_page(
-        self, 
-        event_id: int , 
-        gender: str, 
-        event_number: int,  
-        page_number: int = 1,
+    def fetch_workout_results_page(
+        self,
+        comp_id: int,
+        div_id: str,
+        seq: int,
+        page: int = 1,
         page_size: int = 200,
     ):
         data = {
-            'eventID': event_id,
-            'gender': gender,
-            'eventNumber': event_number,
-            'pageNumber': page_number,
+            'eventID': comp_id,
+            'gender': div_id,
+            'eventNumber': seq,
+            'pageNumber': page,
             'pageSize': page_size,
         }
         params = {'format': 'json'}
 
-        path = '/GetAffiliateEventResultsService.php'
+        path = '/services/GetAffiliateEventResultsService.php'
+        return self._request_json(path,method="POST",params=params,data=data)
 
-        return self._request_json(path, method='POST', params=params, data=data)
-
-    def get_overall_results_page(
+    def fetch_overall_results_page(
         self,
-        event_id: int,
-        gender: str,
-        page_number: int = 1,
+        comp_id: int,
+        div_id: str,
+        page: int = 1,
         page_size: int = 200
     ):
         data = {
-            'eventID': event_id,
-            'gender': gender,
-            'pageNumber': page_number,
+            'eventID': comp_id,
+            'gender': div_id,
+            'pageNumber': page,
             'pageSize': page_size
         }
         params = {'format': 'json'}
 
-        path = '/GetAffiliateEventOverallResultsService.php'
+        path = '/services/GetAffiliateEventOverallResultsService.php'
+        return self._request_json(path,method="POST",params=params,data=data)
 
-        return self._request_json(path, method='POST', params=params, data=data)
+    def fetch_leaderboard_page(
+        self,
+        page: int = 1, 
+        page_size: int = 200,
+        **kwargs
+    ):
+
+        data = {}
+        res = self.fetch_overall_results_page(
+            comp_id=kwargs['comp_id'],
+            div_id=kwargs['div_id'],
+            page=page,
+            page_size=page_size
+        )
+        data['overall'] = res['athletes']
+        data['currentPage'] = res['currentPage']
+        data['totalPages'] = res['totalPages']
+        
+        n = 1
+        while True:
+            try:
+                wod_res = self.fetch_workout_results_page(
+                    comp_id=kwargs['comp_id'],
+                    div_id=kwargs['div_id'],
+                    seq=n,
+                    page=page,
+                    page_size=page_size
+                )
+            except Exception as e:
+                break
+            data[f'event_{n}'] = wod_res['athletes']
+            n += 1
+        
+        return data
 
 class LocalCompAPIRequestClient(APIRequestClient):
     def __init__(self):

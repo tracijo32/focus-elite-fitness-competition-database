@@ -399,3 +399,15 @@ class BTWBWireInventoryManager(InventoryManager):
         )
         return {**config, **data}
 
+class WodcastInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.WodcastAPIRequestClient(),
+            source='wodcast',
+            api_data_path=api_data_path
+        )
+
+    @staticmethod
+    def _get_lb_pg_cnt(data):
+        return data['totalPages']
+
