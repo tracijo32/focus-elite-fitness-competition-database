@@ -263,6 +263,10 @@ for c in countries:
     COUNTRY_NAMES['rossiia'] = countries.get(alpha_2='RU').alpha_3
     COUNTRY_NAMES['osterreich'] = countries.get(alpha_2='AT').alpha_3
 
+ALPHA_3_REMAP = {
+    'SUI': 'CHE',
+    'DEN': 'DNK',
+}
 
 def fuzzy_match_country(x):
     match, _, _ = process.extractOne(
@@ -278,6 +282,8 @@ def get_country_code(x: str | None) -> str | None:
 
     if len(x) == 3:
         try:
+            for k, v in ALPHA_3_REMAP.items():
+                x = x.replace(k, v)
             c = countries.get(alpha_3=x)
             if c is not None:
                 return c.alpha_3
