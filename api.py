@@ -706,3 +706,26 @@ class BTWBWireAPIRequestClient(APIRequestClient):
             'page': page-1
         }
         return self._request_json(path,params=params)
+
+class BTWBRogueAPIRequestClient(APIRequestClient):
+    def __init__(self):
+        super().__init__(
+            base_url="https://rogue.btwb.com"
+        )
+
+    def fetch_leaderboard_page(
+        self,
+        comp_id: str,
+        div_id: int,
+        **kwargs
+    ):
+        path = f'/data/{comp_id}/standings-200-{div_id}.json'
+        return self._request_json(path)
+
+class BTWBRogueInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = BTWBRogueAPIRequestClient(),
+            source='btwb-rogue',
+            api_data_path=api_data_path
+        )

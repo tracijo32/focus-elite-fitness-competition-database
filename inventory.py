@@ -411,3 +411,29 @@ class WodcastInventoryManager(InventoryManager):
     def _get_lb_pg_cnt(data):
         return data['totalPages']
 
+class BTWBRogueInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            api_client = api.BTWBRogueAPIRequestClient(),
+            source='btwb-rogue',
+            api_data_path=api_data_path
+        )
+
+
+class ManualInventoryManager(InventoryManager):
+    def __init__(self, api_data_path: str = 'api'):
+        super().__init__(
+            source='manual',
+            api_data_path=api_data_path
+        )
+
+    def _build_workouts_blob(self, **kwargs):
+        return f'{self.prefix}/{kwargs["comp_id"]}/workouts.json'
+
+    def load_leaderboard_page(self, **kwargs):
+        blob_name = self._build_lb_pg_blob(**kwargs)
+        return self.download_as_json(blob_name)
+
+    def load_workouts(self, **kwargs):
+        blob_name = self._build_workouts_blob(**kwargs)
+        return self.download_as_json(blob_name)

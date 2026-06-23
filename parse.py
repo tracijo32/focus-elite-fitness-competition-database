@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-import inventory
+import inventory as inv
 import pandas as pd
 from models import Entrant, Score, Metadata, Workout
 from util import convert_value_to_display
@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from util import get_country_code
 
 class Parser:
-    def __init__(self, manager: inventory.InventoryManager):
+    def __init__(self, manager: inv.InventoryManager):
         self.manager = manager()
         gcp_params = GoogleCloudParameters()
         self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
@@ -117,7 +117,7 @@ class Parser:
 
 class StrongestParser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.StrongestInventoryManager)
+        super().__init__(manager=inv.StrongestInventoryManager)
 
     def get_policy_frame(self, comp_id: str, refresh: bool = False):
         scoring_policies = self.manager.load_scoring_policies(comp_id=comp_id, refresh=refresh)
@@ -508,7 +508,7 @@ class StrongestParser(Parser):
 
 class ScoreItParser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.ScoreItInventoryManager)
+        super().__init__(manager=inv.ScoreItInventoryManager)
 
     def parse_metadata(self, comp_id, refresh: bool = False):
         data = self.manager.load_metadata(comp_id=comp_id, refresh=refresh)
@@ -690,7 +690,7 @@ class ScoreItParser(Parser):
 
 class CompetitionCornerParser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.CompetitionCornerInventoryManager)
+        super().__init__(manager=inv.CompetitionCornerInventoryManager)
 
     def parse_metadata(self, comp_id, refresh: bool = False):
         data = self.manager.load_metadata(comp_id=comp_id, refresh=refresh)
@@ -1031,7 +1031,7 @@ class CompetitionCornerParser(Parser):
 class CrossFitParser(Parser):
     def __init__(self):
         super().__init__(
-            manager=inventory.CrossFitInventoryManager
+            manager=inv.CrossFitInventoryManager
         )
 
     def build_parsed_blob_name(self, model_name: str, **kwargs):
@@ -1193,7 +1193,7 @@ class CrossFitParser(Parser):
 
 class LocalCompParser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.LocalCompInventoryManager)
+        super().__init__(manager=inv.LocalCompInventoryManager)
 
     def get_leaderboard_frame(
         self, 
@@ -1307,7 +1307,7 @@ class LocalCompParser(Parser):
 
 class Circle21Parser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.Circle21InventoryManager)
+        super().__init__(manager=inv.Circle21InventoryManager)
         gcp_params = GoogleCloudParameters()
         self.geolocator = GoogleV3(api_key=gcp_params.maps_api_key)
 
@@ -1334,7 +1334,7 @@ class Circle21Parser(Parser):
 
 class CaptureFitParser(Parser):
     def __init__(self):
-        super().__init__(manager=inventory.CaptureFitInventoryManager)
+        super().__init__(manager=inv.CaptureFitInventoryManager)
 
     def get_leaderboard_frame(
         self,**kwargs
@@ -1487,7 +1487,7 @@ class CaptureFitParser(Parser):
 class BTWBWireParser(Parser):
     def __init__(self):
         super().__init__(
-            manager=inventory.BTWBWireInventoryManager
+            manager=inv.BTWBWireInventoryManager
         )
 
     def get_leaderboard_frame(
@@ -1587,103 +1587,11 @@ class BTWBWireParser(Parser):
         self.dump_entrants_frame(entrants_df,**kwargs)
         self.dump_scores_frame(scores_df,**kwargs)
         return
-
-
-class WodcastAPIRequestClient(APIRequestClient):
-    def __init__(self):
-        super().__init__(
-            base_url='https://www.wodcast.com'
-        )
-
-    def fetch_workout_results_page(
-        self,
-        comp_id: int,
-        div_id: str,
-        seq: int,
-        page: int = 1,
-        page_size: int = 200,
-    ):
-        data = {
-            'eventID': comp_id,
-            'gender': div_id,
-            'eventNumber': seq,
-            'pageNumber': page,
-            'pageSize': page_size,
-        }
-        params = {'format': 'json'}
-
-        path = '/services/GetAffiliateEventResultsService.php'
-        return self._request_json(path,method="POST",params=params,data=data)
-
-    def fetch_overall_results_page(
-        self,
-        comp_id: int,
-        div_id: str,
-        page: int = 1,
-        page_size: int = 200
-    ):
-        data = {
-            'eventID': comp_id,
-            'gender': div_id,
-            'pageNumber': page,
-            'pageSize': page_size
-        }
-        params = {'format': 'json'}
-
-        path = '/services/GetAffiliateEventOverallResultsService.php'
-        return self._request_json(path,method="POST",params=params,data=data)
-
-    def fetch_leaderboard_page(
-        self,
-        page: int = 1, 
-        page_size: int = 200,
-        **kwargs
-    ):
-
-        data = {}
-        res = self.fetch_overall_results_page(
-            comp_id=kwargs['comp_id'],
-            div_id=kwargs['div_id'],
-            page=page,
-            page_size=page_size
-        )
-        data['overall'] = res['athletes']
-        data['currentPage'] = res['currentPage']
-        data['totalPages'] = res['totalPages']
-        
-        n = 1
-        while True:
-            try:
-                wod_res = self.fetch_workout_results_page(
-                    comp_id=kwargs['comp_id'],
-                    div_id=kwargs['div_id'],
-                    seq=n,
-                    page=page,
-                    page_size=page_size
-                )
-            except Exception as e:
-                break
-            data[f'event_{n}'] = wod_res['athletes']
-            n += 1
-        
-        return data
-
-class WodcastInventoryManager(InventoryManager):
-    def __init__(self, api_data_path: str = 'api'):
-        super().__init__(
-            api_client = WodcastAPIRequestClient(),
-            source='wodcast',
-            api_data_path=api_data_path
-        )
-
-    @staticmethod
-    def _get_lb_pg_cnt(data):
-        return data['totalPages']
         
 class WodcastParser(Parser):
     def __init__(self):
         super().__init__(
-            manager=WodcastInventoryManager
+            manager=inv.WodcastInventoryManager
         )
 
     def get_leaderboard_frame(self,**kwargs):
@@ -1775,7 +1683,7 @@ class WodcastParser(Parser):
 class WodcastParser(Parser):
     def __init__(self):
         super().__init__(
-            manager=inventory.WodcastInventoryManager
+            manager=inv.WodcastInventoryManager
         )
 
     def get_leaderboard_frame(self,**kwargs):
@@ -1862,4 +1770,197 @@ class WodcastParser(Parser):
         scores_df = self.get_scores_frame(df)
         self.dump_entrants_frame(entrants_df,**kwargs)
         self.dump_scores_frame(scores_df,**kwargs)
+        return
+
+class BTWBRogueParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=inv.BTWBRogueInventoryManager
+        )
+
+    def get_leaderboard_frame(self,**kwargs):
+        df = super().get_leaderboard_frame(**kwargs)
+
+        events = df['data'].apply(pd.Series)['events']\
+            .apply(lambda x: {x[i]:i for i in range(len(x))})\
+                .tolist()
+
+        events = {k:v for e in events for k,v in e.items()}
+
+        df = pd.merge(
+            df[['comp_id','div_id','gender']],
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).drop(columns=['events'])\
+            .explode('competitors',ignore_index=True)
+
+        df = pd.merge(
+            df.drop(columns=['competitors']),
+            df['competitors'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={
+            'comp_id':'source_comp_id',
+            'div_id':'source_division_id',
+            'id':'source_entrant_id'
+        }).astype({
+            'source_entrant_id':str,
+            'source_comp_id':str,
+            'source_division_id':str
+        })  
+
+        df['source_athlete_id'] = df['source_entrant_id']
+        df.columns = [events.get(i,i) for i in df.columns]
+
+        return df
+
+    @staticmethod
+    def get_entrants_frame(df: pd.DataFrame):
+        event_cols = [c for c in df.columns if isinstance(c,int)]
+        entrants_df = df.drop(columns=event_cols)\
+            .rename(columns={
+                'rank':'overall_rank',
+                'total':'overall_points',
+                'name':'display_name',
+                'imageUrl':'headshot_url',
+                'country':'country_code'
+            })
+        entrants_df['country_code'] = entrants_df['country_code']\
+                .apply(get_country_code)
+
+        for status in entrants_df['status'].unique():
+            entrants_df[status.lower()] = entrants_df['status'].eq(status)
+
+        return entrants_df
+
+    @staticmethod
+    def get_scores_frame(df: pd.DataFrame):
+        event_cols = [c for c in df.columns if isinstance(c,int)]
+        scores_df = pd.melt(
+            df,
+            id_vars=['source_comp_id','source_athlete_id',
+            'source_entrant_id','source_division_id','gender'],
+            value_vars=event_cols,
+            var_name='event',
+            value_name='data'
+        )
+        scores_df = pd.merge(
+            scores_df.drop(columns=['data']),
+            scores_df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={'order':'source_workout_id','eventOverallRank':'rank'})
+
+        scores_df[['score_display','tiebreak_display']] = scores_df['score'].str.extract(
+            r'^(?P<score_display>.*?)\s*\[(?P<tiebreak_display>[^\]]+)\]$'
+        )
+
+        scores_df['score_display'] = scores_df['score_display'].fillna(scores_df['score'])
+        scores_df['rank'] = scores_df['rank'].astype(str).str.replace('T','',regex=False)
+        scores_df['rank'] = pd.to_numeric(scores_df['rank'], errors='coerce')
+        scores_df['points'] = pd.to_numeric(scores_df['points'], errors='coerce')
+
+        return scores_df
+    
+    def parse_leaderboard(self,**kwargs):
+        df = self.get_leaderboard_frame(**kwargs)
+        entrants_df = self.get_entrants_frame(df)
+        scores_df = self.get_scores_frame(df)
+        self.dump_entrants_frame(entrants_df,**kwargs)
+        self.dump_scores_frame(scores_df,**kwargs)
+        return
+    
+
+
+class ManualParser(Parser):
+    def __init__(self):
+        super().__init__(
+            manager=inv.ManualInventoryManager
+        )
+
+    def get_leaderboard_frame(
+        self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = super().get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        ).rename(columns={
+            'comp_id': 'source_comp_id',
+            'div_id': 'source_division_id'
+        }).explode('data',ignore_index=True)
+
+        df = pd.merge(
+            df.drop(columns=['data']),
+            df['data'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        ).rename(columns={'cf_id':'source_entrant_id'})\
+            .astype({'source_entrant_id':str})
+        df['source_athlete_id'] = df['source_entrant_id']
+        return df
+
+    @staticmethod
+    def get_entrants_frame(df: pd.DataFrame):
+        if 'country_code' not in df.columns:
+            return df
+        df['country_code'] = df['country_code'].apply(get_country_code)
+        return df
+
+    @staticmethod
+    def get_scores_frame(df: pd.DataFrame):
+        if 'scores' not in df.columns:
+            return
+        scores_df = pd.merge(
+            df[['source_comp_id','source_division_id',
+            'source_athlete_id','source_entrant_id','gender']],
+            df['scores'].apply(lambda x: [{'source_workout_id': k,**v} for k,v in x.items()]),
+            left_index=True,
+            right_index=True
+        ).explode('scores',ignore_index=True)
+
+        scores_df = pd.merge(
+            scores_df.drop(columns=['scores']),
+            scores_df['scores'].apply(pd.Series),
+            left_index=True,
+            right_index=True
+        )
+        scores_df['score_display'] = scores_df['score_display'].fillna('--')
+        return scores_df
+
+    def parse_leaderboard(self,
+        comp_id: str,
+        division_male: str,
+        division_female: str
+    ):
+        df = self.get_leaderboard_frame(
+            comp_id=comp_id,
+            division_male=division_male,
+            division_female=division_female
+        )
+        entrants_df = self.get_entrants_frame(df)   
+        self.dump_entrants_frame(entrants_df,comp_id=comp_id)
+        scores_df = self.get_scores_frame(df)
+        if scores_df is None:
+            return
+        
+        self.dump_scores_frame(scores_df,comp_id=comp_id)
+        return
+
+    def parse_workouts(self,comp_id: str):
+        workouts = self.manager.load_workouts(comp_id=comp_id)
+        wo_df = pd.DataFrame([
+            {
+                'source_workout_id': str(k),
+                'seq': int(k),
+                **v
+            }
+            for k,v in workouts.items()
+        ]).assign(source_comp_id=comp_id)
+
+        self.dump_workouts_frame(wo_df,comp_id=comp_id)
         return
