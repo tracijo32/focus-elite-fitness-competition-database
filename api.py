@@ -721,11 +721,3 @@ class BTWBRogueAPIRequestClient(APIRequestClient):
     ):
         path = f'/data/{comp_id}/standings-200-{div_id}.json'
         return self._request_json(path)
-
-class BTWBRogueInventoryManager(InventoryManager):
-    def __init__(self, api_data_path: str = 'api'):
-        super().__init__(
-            api_client = BTWBRogueAPIRequestClient(),
-            source='btwb-rogue',
-            api_data_path=api_data_path
-        )
