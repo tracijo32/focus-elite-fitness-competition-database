@@ -62,6 +62,7 @@ class Score(BaseModel):
     rank: int | None = None
     points: float | None = None
     source_division_id: str | None = None
+    source_entrant_id: str | None = None
 
 class Metadata(BaseModel):
     source_comp_id: str
