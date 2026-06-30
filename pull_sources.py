@@ -71,27 +71,34 @@ def pull_competition():
     
 def parse_crossfit_leaderboard(
     parser: parse.CrossFitParser,
+    min_pages: int = 1,
+    max_pages: int | None = None,
     **kwargs
 ):
     results = []
     try:
         parser.parse_leaderboard_page(**kwargs, page=1)
         total_pages = parser.get_total_pages(**kwargs)
+        if max_pages is not None:
+            total_pages = min(total_pages, max_pages)
         r = {**kwargs, 'page': 1, 'status': 1}
         results.append(r)
     except Exception as e:
         if '404' in str(e):
             r = {**kwargs, 'page': 1, 'status': -404}
         else:
-            r = {**kwargs, 'page': 1, 'status': -1}
+            r = {**kwargs, 'page': 1, 'status': -1, 'error': str(e)}
         results.append(r)
         return results
 
-    page_iter = range(2, total_pages + 1)
-    if total_pages >= 5:
+    start = min(max(min_pages, 2), total_pages)
+
+    page_iter = range(start, total_pages + 1)
+    n = total_pages - start + 1
+    if n >= 5:
         page_iter = tqdm(
             page_iter,
-            total=total_pages,
+            total=n,
             initial=1,
             desc=f"{kwargs['comp_id']} div {kwargs['div_id']}",
             leave=False,
@@ -196,7 +203,9 @@ def parse_all_competitions(
 
 def parse_crossfit_stream_results(
     comp_df: pd.DataFrame,
-    results_file: str = 'crossfit_parse_stream_results.json'
+    results_file: str = 'crossfit_parse_stream_results.json',
+    min_pages: int = 1,
+    max_pages: int | None = None,
 ):
     parser = parse.CrossFitParser()
     req_cols = ['source','comp_id','division_male','division_female','year','comp_type']
@@ -213,7 +222,8 @@ def parse_crossfit_stream_results(
     ).drop(columns=['gender'])
         
     try:
-        results = pd.read_json(results_file)
+        results = pd.read_json(results_file)\
+            .astype(pull_df.dtypes)
         exist = pd.merge(
             pull_df,results,
             on=['comp_id','div_id','comp_type','year'],
@@ -231,9 +241,13 @@ def parse_crossfit_stream_results(
 
     for _, row in tqdm(pull_df.iterrows(), total=len(pull_df)):
         kwargs = row.to_dict()
-        res = parse_crossfit_leaderboard(parser, **kwargs)
+        res = parse_crossfit_leaderboard(parser,
+            min_pages=min_pages,
+            max_pages=max_pages,
+            **kwargs
+        )
         results.extend(res)
-        pd.DataFrame(results).to_json(results_file, orient='records')
+        pd.DataFrame(results).to_json(results_file, orient='records',indent=4)
         
     print('done')
 
@@ -244,8 +258,11 @@ if __name__ == '__main__':
     ## only crossfit competitions from 2025 and earlier, or open & qf in 2026
     comp_df = comp_df.loc[comp_df['source'].eq('crossfit')]
     comp_df = comp_df[
-        comp_df['year'].lt(2026) |
-        comp_df['comp_type'].eq('open') |
-        comp_df['comp_type'].str.contains('quarter')
+        comp_df['year'].lt(2026) &
+        comp_df['comp_type'].ne('open') &
+        comp_df['comp_type'].ne('quarter')
+        # comp_df['comp_type'].eq('open') |
+        # comp_df['comp_type'].str.contains('quarter')
+        # comp_df['year'].eq(2025)
     ]
-    parse_crossfit_stream_results(comp_df)
+    parse_crossfit_stream_results(comp_df,max_pages=100)

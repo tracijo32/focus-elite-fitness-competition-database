@@ -16,6 +16,10 @@ SOURCES = [
     'strongest',
     'score-it',
     'local-comp',
+    'capturefit',
+    'btwb-rogue',
+    'wodcast',
+    'btwb-thewire',
     'manual'
 ]
 
@@ -569,6 +573,15 @@ def create_source_leaderboard_url_view():
                 s.source_comp_id, '/',
                 {rep_str}
             )
+            WHEN s.source = 'wodcast'
+            THEN CONCAT(
+                'https://www.wodcast.com/OnlineEventLeaderboardPage.php?eventID=',
+                s.source_comp_id
+            )
+            WHEN s.source = 'capturefit' AND s.source_comp_id LIKE '5bdc4%'
+            THEN 'https://capturefit.com/leaderboard/fict-2019'
+            WHEN s.source = 'capturefit'
+            THEN 'https://capturefit.com/leaderboard/fict-2019-online-qualifiers'
             ELSE NULL
         END AS leaderboard_url
     FROM `staging.sources` AS s

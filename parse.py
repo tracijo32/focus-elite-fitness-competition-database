@@ -215,26 +215,27 @@ class StrongestParser(Parser):
 
         entrants_df = pd.merge(
             entrants_df.drop(columns=['teamProfiles']),
-            entrants_df['teamProfiles'].apply(pd.Series)[['country']],
+            entrants_df['teamProfiles'].apply(pd.Series)\
+                [['country','username']],
             left_index=True,
             right_index=True
         ).reindex(
             columns=['comp_id','div_id','gender',
-            'competitor_name','gym','country',
+            'competitor_name','gym','country','username',
             'overall','registrationId','cum_workout_rank']
         ).rename(columns={
             'overall': 'overall_rank',
             'cum_workout_rank': 'overall_points',
             'comp_id': 'source_comp_id',
             'div_id': 'source_division_id',
-            'registrationId': 'source_athlete_id',
+            'username': 'source_athlete_id',
+            'registrationId': 'source_entrant_id',
             'competitor_name': 'display_name',
             'country': 'country_code',
             'gym': 'home_gym'
         })
-        entrants_df['country_code'] = entrants_df['country_code'].apply(
-            get_country_code
-        )
+        entrants_df['country_code'] = entrants_df['country_code'].fillna('')\
+            .apply(get_country_code)
 
         entrants_df['overall_rank'] = entrants_df['overall_rank'].str.extract(r'(\d+)')\
             .apply(pd.to_numeric, errors='coerce')
@@ -255,8 +256,15 @@ class StrongestParser(Parser):
             left_index=True,
             right_index=True
         ).rename(columns={
-            'registrationId':'source_athlete_id'
+            'registrationId':'source_entrant_id'
         })
+
+        scores_df = pd.merge(
+            scores_df,
+            entrants_df[['source_athlete_id','source_entrant_id']],
+            on=['source_entrant_id'],
+            how='left'
+        )
 
         ## get the workout number, score, rank, and points
         scores_df = pd.merge(
@@ -764,11 +772,13 @@ class CompetitionCornerParser(Parser):
                 'comp_id': 'source_comp_id',
                 'div_id': 'source_division_id',
                 'rosterID': 'source_athlete_id',
+                'ptcpID': 'source_entrant_id'
             }
         ).astype({
             'source_comp_id':str,
             'source_division_id':str,
-            'source_athlete_id':str
+            'source_athlete_id':str,
+            'source_entrant_id':str
         })
         return df
 
@@ -782,16 +792,16 @@ class CompetitionCornerParser(Parser):
             'affiliate': 'home_gym'
         })
 
-        cc1 = entrants_df['countryCode'].apply(get_country_code)
-        cc2 = entrants_df['countryShortCode'].apply(get_country_code)
-        cc3 = entrants_df['countryName'].apply(get_country_code)
+        cc1 = entrants_df['countryCode'].fillna('').apply(get_country_code)
+        cc2 = entrants_df['countryShortCode'].fillna('').apply(get_country_code)
+        cc3 = entrants_df['countryName'].fillna('').apply(get_country_code)
 
         entrants_df['country_code'] = cc1.fillna(cc2).fillna(cc3)
 
         entrants_df = entrants_df.reindex(
             columns = [
                 'source_comp_id','source_division_id','gender',
-                'source_athlete_id','display_name',
+                'source_athlete_id','source_entrant_id','display_name',
                 'overall_rank','overall_points',
                 'dq','wd','dnf',
                 'country_code','home_gym'
@@ -807,7 +817,7 @@ class CompetitionCornerParser(Parser):
         ## merge entrant data with the workout scores
         scores_df = pd.merge(
             df[['source_comp_id','source_division_id',
-            'source_athlete_id','gender']],
+            'source_athlete_id','source_entrant_id','gender']],
             df['workoutScores'].apply(lambda x: list(x.values())),
             left_index=True,
             right_index=True
@@ -858,12 +868,13 @@ class CompetitionCornerParser(Parser):
 
         scores_df = scores_df.reindex(
             columns=[
-                'source_comp_id','source_athlete_id',
+                'source_comp_id','source_athlete_id','source_entrant_id',
                 'gender','source_division_id','source_workout_id',
                 'score_display','tiebreaker_display',
                 'rank','points']
         ).astype({
             'source_comp_id':str,
+            'source_entrant_id':str,
             'source_division_id':str,
             'source_athlete_id':str,
             'source_workout_id':str,
@@ -1076,6 +1087,7 @@ class CrossFitParser(Parser):
             'competitorId':'source_athlete_id',
             'competitorName':'display_name'
         })
+        df['source_entrant_id'] = df['source_athlete_id']
         df['overall_rank'] = pd.to_numeric(df['overall_rank'],errors='coerce')
         df['source_division_id'] = df['gender'].map({'M':'1','F':'2'})
 
@@ -1131,7 +1143,7 @@ class CrossFitParser(Parser):
 
         entrants_df = entrants_df.reindex(
             columns=['source_comp_id','source_division_id','gender',
-            'source_athlete_id','display_name','overall_score','overall_points',
+            'source_athlete_id','display_name','overall_rank','overall_points',
             'dq','wd','dnf','cut','country_code','home_gym']
         )
         return entrants_df
@@ -1186,8 +1198,8 @@ class CrossFitParser(Parser):
         entrants_df = self.get_entrants_frame(df)
         scores_df = self.get_scores_frame(df)
 
-        self.dump_entrants_frame(entrants_df,**kwargs)
-        self.dump_scores_frame(scores_df,**kwargs)
+        self.dump_entrants_frame(entrants_df,page=page,**kwargs)
+        self.dump_scores_frame(scores_df,page=page,**kwargs)
 
         return
 
